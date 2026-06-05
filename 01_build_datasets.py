@@ -15,7 +15,7 @@ import json
 import numpy as np
 import pandas as pd
 from scipy import stats
-from hac import ols, poisson_hac, bh
+from hac import ols, poisson_hac, bh, deseasonalize
 
 WIN_START, WIN_END = "2017-01-01", "2026-06-04"   # [start, end) local time
 VIOL = {'AGGRAVATED ASSAULT', 'ASSAULT', 'WEAPONS OFFENSES', 'ROBBERY', 'HOMICIDE',
@@ -33,7 +33,8 @@ def family(c):
 
 # OLS with Newey-West (HAC) standard errors lives in hac.py and is shared by the
 # figure and report scripts; daily crime counts are serially correlated, so i.i.d.
-# errors would overstate significance by ~2x.
+# errors would overstate significance by ~2-3x (the SE roughly triples from
+# nonrobust to HAC for the total-crime series).
 
 
 # ----------------------------------------------------------- incident-level frame
@@ -68,10 +69,12 @@ print(f"  {len(inc):,} incidents  ({inc['ph_time'].sum():,} placeholder-time, "
 # ~230/day norm), which would otherwise enter every daily regression as a
 # spurious near-zero point and depress recent-day counts to zero after the
 # reindex(...).fillna(0) used downstream. Walk back from the end and trim any
-# trailing day under half the preceding 4-week median, stopping at the first
-# full day so genuine low-count interior days are left untouched.
+# trailing day under half the reference median, stopping at the first full day so
+# genuine low-count interior days are left untouched. The reference is a 4-week
+# window ending a week before the last day, so the (possibly under-reported)
+# trailing days don't drag the threshold down and mask their own incompleteness.
 _dt_tot = inc.groupby('date').size().sort_index()
-_ref = _dt_tot.iloc[-29:-1].median()
+_ref = _dt_tot.iloc[-35:-7].median()
 _cut = _dt_tot.index.max()
 for _d in reversed(_dt_tot.index):
     if _dt_tot[_d] < 0.5 * _ref:
@@ -94,11 +97,8 @@ wd = wd.loc[wd.index <= _cut]
 wf = wf.loc[wf.index <= _cut]
 wh = wh[wh['time'].dt.normalize() <= _cut]
 temp = wd['temperature_2m_mean']
-doy = temp.index.dayofyear
-
-
-def climo_anom(s):
-    return s - s.groupby(doy).transform('mean')
+# Smooth, leap-year-safe harmonic deseasonalization (shared with the figures).
+climo_anom = deseasonalize
 
 
 # --------------------------------------------------- daily category / family tables
@@ -200,10 +200,13 @@ for nb in nb_vol[nb_vol >= 3000].index:
     sub = geo[geo.neighborhood == nb]
     d = sub.groupby('date').size(); d.index = pd.to_datetime(d.index)
     d = d.reindex(temp.index).fillna(0)
-    r, _ = stats.pearsonr(temp, d); b, _ = np.polyfit(temp, d, 1)
+    r, _ = stats.pearsonr(temp, d)
+    # Poisson log-link with HAC SEs, matching the rest of the pipeline (the
+    # reindexed series is a contiguous daily series, so HAC lags are valid).
+    bc, _ = poisson_hac(d.values, [temp.values])
     nb_rows.append(dict(neighborhood=nb, total=len(sub), per_day=d.mean(),
         lat=sub.latitude.median(), lon=sub.longitude.median(),
-        r=r, pct10=b * 10 / d.mean() * 100))
+        r=r, pct10=(np.exp(10 * bc[1]) - 1) * 100))
 pd.DataFrame(nb_rows).sort_values('total', ascending=False).to_csv('neighborhood_stats.csv', index=False)
 
 geo = geo.copy(); geo['police_precinct'] = geo['police_precinct'].astype(str).str.zfill(2)
@@ -213,10 +216,11 @@ for pc, sub in geo.groupby('police_precinct'):
         continue
     d = sub.groupby('date').size(); d.index = pd.to_datetime(d.index)
     d = d.reindex(temp.index).fillna(0)
-    r, _ = stats.pearsonr(temp, d); b, _ = np.polyfit(temp, d, 1)
+    r, _ = stats.pearsonr(temp, d)
+    bc, _ = poisson_hac(d.values, [temp.values])   # Poisson log-link, HAC SEs
     pc_rows.append(dict(precinct=pc, total=len(sub), per_day=round(d.mean(), 1),
         pct_violent=round((sub.family == 'Violent').mean() * 100, 1),
-        pct10=round(b * 10 / d.mean() * 100, 1), r=round(r, 2)))
+        pct10=round((np.exp(10 * bc[1]) - 1) * 100, 1), r=round(r, 2)))
 pd.DataFrame(pc_rows).sort_values('total', ascending=False).to_csv('precinct_stats.csv', index=False)
 
 # --------------------------------------------------------- time-of-day aggregates
@@ -243,8 +247,13 @@ dd = pd.DataFrame({'n': dtot.reindex(temp.index).fillna(0)})
 dd['wknd'] = dd.index.dayofweek >= 5; dd['temp'] = temp
 ww = {}
 for lab, sub in [('Weekday', dd[~dd.wknd]), ('Weekend', dd[dd.wknd])]:
-    r, _ = stats.pearsonr(sub.temp, sub.n); b, a = np.polyfit(sub.temp, sub.n, 1)
-    ww[lab] = dict(r=r, slope=b, intercept=a, mean=sub.n.mean(), pct10=b * 10 / sub.n.mean() * 100)
+    r, _ = stats.pearsonr(sub.temp, sub.n)
+    # Weekday-only / weekend-only rows are NOT a contiguous daily series, so the
+    # HAC autocovariance lags are meaningless -> White/HC0 robust SEs (hac=False).
+    bc, _ = poisson_hac(sub.n.values, [sub.temp.values], hac=False)
+    ww[lab] = dict(r=r, mean=sub.n.mean(),
+        slope_per_F=sub.n.mean() * (np.exp(bc[1]) - 1),
+        pct10=(np.exp(10 * bc[1]) - 1) * 100)
 pd.DataFrame(ww).T.to_csv('weekday_weekend_stats.csv')
 
 vd = dfam['Violent'].reindex(temp.index).fillna(0)
@@ -279,8 +288,12 @@ mp.groupby('cond').agg(days=('total', 'size'), temp=('temperature_2m_mean', 'mea
 # ------------------------------------------------------------- profile_data.json
 print("Building profile_data.json …")
 tbin_s = pd.cut(temp, bins=TBINS, labels=TLABELS)
-T = temp.values; R = wf['rain_sum'].values; S = wf['snowfall_sum'].values
-WET = (wf['precipitation_sum'] >= 0.01).astype(float).values
+# Align the weather regressors to the temperature (daily) index explicitly, so a
+# missing weather day surfaces as a NaN here rather than silently shifting rows
+# when y (reindexed to temp.index) and these arrays are column-stacked.
+wfa = wf.reindex(temp.index)
+T = temp.values; R = wfa['rain_sum'].values; S = wfa['snowfall_sum'].values
+WET = (wfa['precipitation_sum'] >= 0.01).astype(float).values
 
 def profile(series_daily, hourly_counts):
     # Poisson PML (log link, HAC SEs) for every weather effect; significance is

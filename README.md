@@ -50,8 +50,10 @@ step 1.
 - Daily crime is modelled as a count with a **Poisson regression (log link, PML)**;
   point estimates are consistent for the conditional mean even under over-dispersion.
   OLS is kept only for the deseasonalised "anomaly" check, where the series can go
-  negative. All precipitation, wind and heat-wave effects **control for temperature**,
-  so the weather signal is not just the season.
+  negative; the seasonal cycle is removed with a smooth **low-order harmonic
+  (Fourier) fit** on the day-of-year (leap-year safe) rather than a noisy
+  per-calendar-day mean. All precipitation, wind and heat-wave effects
+  **control for temperature**, so the weather signal is not just the season.
 - Daily crime series are autocorrelated and over-dispersed, so all p-values and
   significance flags use **Newey-West (HAC)** robust standard errors rather than
   i.i.d. errors, and families of tests are corrected for multiple comparisons with

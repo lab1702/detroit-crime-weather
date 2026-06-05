@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mc
 from matplotlib.patches import Patch
 from scipy import stats
-from hac import poisson_hac
+from hac import poisson_hac, deseasonalize
 
 os.makedirs('figs', exist_ok=True)
 INK = '#1a1d29'; SUB = '#5b6577'; GRID = '#e6e9ef'; CARD = '#ffffff'
@@ -124,17 +124,15 @@ cb = fig.colorbar(im, ax=ax, fraction=0.025, pad=0.02)
 cb.set_label('Rate vs. average  (1.00 = typical day)', fontsize=9); cb.outline.set_visible(False)
 plt.tight_layout(); plt.savefig('figs/fig5_heatmap.png', bbox_inches='tight'); plt.close()
 
-# ---- FIG 6 : anomaly
-doy = m.index.dayofyear
-def anom(s): return s - s.groupby(doy).transform('mean')
-ta, ca = anom(temp), anom(tot)
+# ---- FIG 6 : anomaly (smooth, leap-year-safe harmonic deseasonalization)
+ta, ca = deseasonalize(temp), deseasonalize(tot)
 fig, ax = plt.subplots(figsize=(9, 5.2))
 ax.scatter(ta, ca, s=8, c='#2c6fbb', alpha=0.28, edgecolors='none')
 b, a = np.polyfit(ta, ca, 1); xs = np.linspace(ta.min(), ta.max(), 100)
 ax.plot(xs, a + b * xs, color=ACCENT, lw=2.6)
 r, _ = stats.pearsonr(ta, ca)
 ax.axhline(0, color=SUB, lw=0.8); ax.axvline(0, color=SUB, lw=0.8)
-ax.set_xlabel('Temperature anomaly (°F vs. that calendar day’s 9-yr normal)')
+ax.set_xlabel('Temperature anomaly (°F vs. the smooth seasonal normal)')
 ax.set_ylabel('Crime anomaly (vs. seasonal normal)')
 ax.set_title('Even within a season, warmer-than-normal days bring more crime', fontsize=14, fontweight='bold', pad=12)
 ax.text(0.02, 0.96, f'Deseasonalized r = {r:.2f}   •   +{b:.1f} crimes per °F above normal',

@@ -25,10 +25,16 @@ errors, which drop the meaningless cross-day autocovariances.
 
 ``bh`` returns Benjamini-Hochberg FDR-adjusted q-values for a family of tests.
 
+``deseasonalize`` removes a smooth seasonal cycle (harmonic/Fourier regression
+on the day-of-year) and returns anomalies; it is leap-year safe and far more
+stable than a raw per-calendar-day mean estimated from only ~9 observations
+per day.
+
 These are thin wrappers over statsmodels; they only fix the Newey-West
 bandwidth and unpack ``(params, pvalues)`` in the shape the pipeline expects.
 """
 import numpy as np
+import pandas as pd
 import statsmodels.api as sm
 from statsmodels.stats.multitest import multipletests
 
@@ -77,3 +83,28 @@ def poisson_hac(y, X, hac=True):
 def bh(pvals):
     """Benjamini-Hochberg FDR-adjusted q-values for a family of p-values."""
     return multipletests(np.asarray(pvals, dtype=float), method="fdr_bh")[1]
+
+
+def deseasonalize(s, n_harmonics=3):
+    """Seasonal anomalies of a daily Series via harmonic (Fourier) regression.
+
+    Fits ``y ~ 1 + sum_k [sin(k*phi) + cos(k*phi)]`` where the phase ``phi`` is
+    the fraction of the year elapsed, using each year's actual length (365 or
+    366). This is leap-year safe — Feb-29 and every post-February date in a leap
+    year get the correct calendar phase, unlike grouping on ``dayofyear`` — and,
+    being a smooth low-order fit, gives a far more stable "normal" than a raw
+    per-calendar-day mean built from only ~9 observations per day. The original
+    index is preserved so callers can keep aligning by position.
+    """
+    idx = s.index
+    doy = idx.dayofyear.to_numpy(dtype=float)
+    year_len = np.where(idx.is_leap_year, 366.0, 365.0)
+    phi = 2.0 * np.pi * doy / year_len
+    cols = [np.ones_like(phi)]
+    for k in range(1, n_harmonics + 1):
+        cols.append(np.sin(k * phi))
+        cols.append(np.cos(k * phi))
+    X = np.column_stack(cols)
+    y = np.asarray(s, dtype=float)
+    beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+    return pd.Series(y - X @ beta, index=idx)
