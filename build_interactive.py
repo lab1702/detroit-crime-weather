@@ -88,7 +88,7 @@ footer{text-align:center;color:var(--sub);font-size:13px;margin-top:30px}
 <div class="lead" id="lead"></div>
 <div class="stats" id="statcards"></div>
 <div class="charts">
-<div class="panel"><h4>Temperature response</h4><p class="sub">Crime rate vs. the citywide average (1.0×), by daily temperature</p><div id="tempchart"></div>
+<div class="panel"><h4>Temperature response</h4><p class="sub">Crime rate vs. this category's own average (1.0×), by daily temperature</p><div id="tempchart"></div>
 <div class="legend"><span><i style="background:#9aa3b2"></i>All crime</span><span id="tcleg"></span></div></div>
 <div class="panel"><h4>Through the year</h4><p class="sub">Each month vs. this category's own average (100 = typical)</p><div id="monthchart"></div>
 <div class="legend"><span><i style="background:#9aa3b2"></i>All crime</span><span id="mleg"></span></div></div>
@@ -179,7 +179,10 @@ function render(key){
   // lead sentence
   const [td,tc]=descTemp(d);
   const rainTxt = d.rain_sig ? (d.rain_pct<0?`rain damps it down (${d.rain_pct}%/in)`:`it climbs in the rain (+${d.rain_pct}%/in)`) : 'rain barely moves it';
-  const snowTxt = d.snow_sig ? (d.snow_pct<0?`snow ${Math.abs(d.snow_pct)>Math.abs(d.rain_pct)?'cuts it more sharply':'cools it'} (${d.snow_pct}%/in)`:`snow nudges it up`) : 'snow leaves it flat';
+  // Only call snow "sharper" than rain when rain is itself a significant effect;
+  // otherwise the comparison is against a rain effect the prior clause dismissed.
+  const snowSharper = d.snow_sig && d.snow_pct<0 && d.rain_sig && Math.abs(d.snow_pct)>Math.abs(d.rain_pct);
+  const snowTxt = d.snow_sig ? (d.snow_pct<0?`snow ${snowSharper?'cuts it more sharply':'cools it'} (${d.snow_pct}%/in)`:`snow nudges it up`) : 'snow leaves it flat';
   const wk = d.wknd>d.wkdy*1.06?'a weekend offense':(d.wkdy>d.wknd*1.06?'a weekday offense':'evenly split across the week');
   document.getElementById('lead').innerHTML=
     `<span class="nm">${d.name}</span><span class="tag ${fc}">${d.family}</span><br>`+

@@ -124,19 +124,23 @@ n_nb=len(nb); n_nb_sig=int(nb['sig'].sum())   # neighbourhoods significant after
 nb_sig=nb[nb['sig']]
 nb_sens=(nb_sig if len(nb_sig)>=3 else nb).sort_values('pct10',ascending=False)
 top_sens=nb_sens.head(3)
-# Third named example in the §07 prose: prefer Downtown (the riverfront/downtown
-# story), but only if it is actually present in the table — otherwise name the
-# third-ranked sensitive neighbourhood so the label never mismatches its value.
+# Name the genuine top three by sensitivity rather than substituting a
+# narrative-friendly neighbourhood, so every label matches its value. Downtown
+# (a high-volume riverfront district) is referenced separately below.
 _dt=nb[nb.neighborhood=='Downtown']['pct10']
-if len(_dt):
-    third_name, third_pct10 = 'Downtown', _dt.iloc[0]
-else:
-    third_name, third_pct10 = top_sens.iloc[2]['neighborhood'], top_sens.iloc[2]['pct10']
+dt_pct10 = _dt.iloc[0] if len(_dt) else None
 nb_vol=nb.sort_values('total',ascending=False)
 pc=pd.read_csv('precinct_stats.csv')
 pc['precinct']=pc['precinct'].astype(str).str.zfill(2)
 pc=pc.sort_values('total',ascending=False)
 n_pc=len(pc); n_pc_sig=int(pc['sig'].sum())   # precincts significant after FDR
+# Only describe the "n.s." remainder when some precinct actually fails FDR — when
+# all of them clear it, the parenthetical would point at an empty set.
+pc_sig_phrase = ('all individually significant after FDR correction'
+    if n_pc_sig == n_pc else
+    f'{n_pc_sig} of {n_pc} individually significant after FDR correction (the rest, '
+    'flagged <span class="ns">n.s.</span> below, are positive but not distinguishable '
+    'from zero on their own)')
 prows=''
 for _,r in pc.iterrows():
     sig=' <span class="ns">n.s.</span>' if not r.sig else ''
@@ -350,9 +354,9 @@ a{{color:var(--cool)}}
 <h2><span class="n">07 — The map</span>Heat sensitivity is a downtown, riverfront story</h2>
 <p>Crime is not spread evenly across Detroit, and neither is its responsiveness to heat. The density map below traces the familiar geography — corridors along the major avenues, concentration through the greater downtown core, the river defining the southern edge.</p>
 <figure><img src="{b64('figs/fig9_map.png')}" alt="Detroit crime density map"></figure>
-<p>Coloring each neighborhood by its temperature sensitivity reveals a pattern: the <b>entertainment and riverfront districts react most strongly to heat</b>. Among the {n_nb_sig} of {n_nb} neighborhoods whose slope is statistically distinguishable from zero (Benjamini-Hochberg FDR&nbsp;<&nbsp;0.05), {top_sens.iloc[0]['neighborhood']} (+{top_sens.iloc[0]['pct10']:.0f}% per 10&deg;F), {top_sens.iloc[1]['neighborhood']} (+{top_sens.iloc[1]['pct10']:.0f}%), and {third_name} (+{third_pct10:.0f}%) top the list — places where warm weather draws crowds to bars, festivals, and the riverwalk. Quieter residential neighborhoods hover near the citywide +4–5%. The ranking is of noisy per-neighborhood point estimates, so read the broad pattern, not the exact order.</p>
+<p>Coloring each neighborhood by its temperature sensitivity reveals a pattern with a clear lead: <b>entertainment and riverfront districts dominate the top of the list</b>. Among the {n_nb_sig} of {n_nb} neighborhoods whose slope is statistically distinguishable from zero (Benjamini-Hochberg FDR&nbsp;<&nbsp;0.05), the three most sensitive are {top_sens.iloc[0]['neighborhood']} (+{top_sens.iloc[0]['pct10']:.0f}% per 10&deg;F), {top_sens.iloc[1]['neighborhood']} (+{top_sens.iloc[1]['pct10']:.0f}%), and {top_sens.iloc[2]['neighborhood']} (+{top_sens.iloc[2]['pct10']:.0f}%) &mdash; the first two riverfront/nightlife districts where warm weather draws crowds to bars, festivals, and the riverwalk, the third a reminder that the effect is not exclusively a downtown one. Downtown proper itself runs hot (+{dt_pct10:.0f}%), while quieter residential neighborhoods hover near the citywide +4–5%. The ranking is of noisy per-neighborhood point estimates, so read the broad pattern, not the exact order.</p>
 <figure><img src="{b64('figs/fig10_nbmap.png')}" alt="Neighborhood temperature sensitivity map"><figcaption>Each bubble is a neighborhood (≥3,000 incidents): size = total volume, color = % more crime per +10&deg;F.</figcaption></figure>
-<p>At the precinct level the effect is broad but graded — every one of Detroit's precincts shows a positive point estimate (from +{pc['pct10'].min():.1f}% to +{pc['pct10'].max():.1f}% per 10&deg;F), and {n_pc_sig} of {n_pc} are individually significant after FDR correction (the rest, flagged <span class="ns">n.s.</span> below, are positive but not distinguishable from zero on their own).</p>
+<p>At the precinct level the effect is broad but graded — every one of Detroit's precincts shows a positive point estimate (from +{pc['pct10'].min():.1f}% to +{pc['pct10'].max():.1f}% per 10&deg;F), {pc_sig_phrase}.</p>
 <table>
 <thead><tr><th>Precinct</th><th class="num">Incidents</th><th class="num">/day</th>
 <th class="num">% violent</th><th class="num">Per +10&deg;F</th><th class="num">r</th></tr></thead>
@@ -421,7 +425,7 @@ a{{color:var(--cool)}}
 <li><b>Wind &amp; storms.</b> Daily maximum 10&nbsp;m wind speed (mph) from the same archive. Wind effects come from regressions controlling for both temperature and precipitation. "Storm days" are the upper-decile wind days (&ge;{_wthr:.0f}&nbsp;mph) or heavy-rain days (&gt;0.5&nbsp;in); the ERA5 archive does not flag thunderstorms separately, so no lightning/thunder classification is used.</li>
 <li><b>Heat waves.</b> Defined as 3+ consecutive days with a daily high &ge;85&deg;F (using daily maximum, not mean, temperature). The cumulative test regresses daily crime (Poisson, log link) on the day's maximum temperature plus an indicator for being on day&nbsp;3 or later of a wave, so any heat-wave coefficient is the effect <i>beyond</i> that day's heat. Because this test runs on the hot-days-only sub-sample &mdash; which is not a contiguous daily series &mdash; it uses heteroskedasticity-robust White standard errors (the HC3 variant, whose leverage correction keeps the small ~100-row sub-sample well-calibrated) rather than the HAC lags used elsewhere.</li>
 <li><b>Correlation, not causation.</b> These are observational associations. Heat plausibly increases crime through more time outdoors, more social contact, and the well-studied link between temperature and aggression — but daylight hours, school calendars, and seasonal routines move with temperature and are not separately controlled here (the anomaly analysis mitigates, not eliminates, this). The deseasonalizing removes only the smooth within-year cycle, not any multi-year trend or one-off shock (e.g. 2020); because temperature anomalies are essentially uncorrelated with the calendar year, such residual structure adds noise to the crime anomaly rather than correlated signal, so it biases the deseasonalized correlation <i>toward</i> zero &mdash; the reported anomaly effect is, if anything, conservative.</li>
-<li><b>Reporting effects.</b> Figures count <i>reported</i> incidents. Categories such as fraud reflect when a report was filed rather than when conduct occurred, which dampens any weather signal. Recent weeks may be revised upward as cases are entered, so not-yet-complete trailing days (any final day whose count falls below half the preceding four-week median) are dropped from the analysis window rather than entering the regressions as artificial near-zero days.</li>
+<li><b>Reporting effects.</b> Figures count <i>reported</i> incidents. Categories such as fraud reflect when a report was filed rather than when conduct occurred, which dampens any weather signal. Recent weeks may be revised upward as cases are entered, so not-yet-complete trailing days (any final day whose count falls below half a reference median &mdash; the median of a 90-day window ending 30 days before the last day, kept that far back so the reference itself stays outside the under-reported tail) are dropped from the analysis window rather than entering the regressions as artificial near-zero days.</li>
 </ul>
 </section>
 

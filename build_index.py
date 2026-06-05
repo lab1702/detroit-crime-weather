@@ -20,7 +20,7 @@ V = {k:v for k,v in {
  'ndays':f"{meta['n_days']:,}", 'd0':meta['d0'], 'd1':meta['d1'],
  'total':f"{ALL['total']:,}", 'perday':f"{ALL['per_day']:.0f}",
  'pct10':f"{ALL['pct10']:.1f}", 'pctch':f"{pct_ch:.0f}",
- 'topcat':top['category'].title(), 'toppct':f"{top['pct_per_10F']:.0f}",
+ 'topcat':top['category'].title(), 'toppct':f"{top['pct_per_10F']:.1f}",
  'ncat':int(n_cat),
 }.items()}
 

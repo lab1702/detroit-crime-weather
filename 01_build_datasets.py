@@ -372,7 +372,8 @@ def profile(series_daily, hourly_counts):
     hr = hourly_counts.reindex(range(24)).fillna(0)
     hshare = (hr / hr.sum() * 100).round(2).tolist()
     peak_hr = int(hr.idxmax())   # placeholder midnight/noon stamps already removed
-    relrate = (rel / mean).round(3).tolist()
+    relrate_exact = rel / mean
+    relrate = relrate_exact.round(3).tolist()
     return dict(total=int(s.sum()), per_day=round(mean, 2), relrate=relrate,
         absrate=rel.round(2).tolist(), monthly=monthly, hourly=hshare,
         pct10=round(pct10, 1), r=round(r_p, 2), anom_r=round(anom_r, 2),
@@ -380,7 +381,7 @@ def profile(series_daily, hourly_counts):
         rain_pct=round((np.exp(br[2]) - 1) * 100, 1), rain_sig=bool(pr[2] < 0.05),
         snow_pct=round((np.exp(br[3]) - 1) * 100, 1), snow_sig=bool(pr[3] < 0.05),
         peak_hr=peak_hr, peak_month=int(np.argmax(monthly)) + 1,
-        hot_cold=round(relrate[-1] / relrate[0], 2) if relrate[0] else None,
+        hot_cold=round(relrate_exact.iloc[-1] / relrate_exact.iloc[0], 2) if relrate_exact.iloc[0] else None,
         wknd=round(s[s.index.dayofweek >= 5].mean(), 2),
         wkdy=round(s[s.index.dayofweek < 5].mean(), 2),
         # raw p-values retained for FDR correction; stripped before serialising
