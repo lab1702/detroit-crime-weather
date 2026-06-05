@@ -18,6 +18,23 @@ d0,d1 = m.index.min().date(), m.index.max().date()
 tot_r = cs.loc[cs.category=='total_crimes','pearson_r'].iloc[0]
 tot_pct = cs.loc[cs.category=='total_crimes','pct_per_10F'].iloc[0]
 tot_anom = cs.loc[cs.category=='total_crimes','anom_r'].iloc[0]
+tot_curv_p = cs.loc[cs.category=='total_crimes','curv_p'].iloc[0]
+# data-driven phrasing for the linearity claim: a non-significant quadratic term
+# means the log-linear temperature response is not masking real curvature
+_curv_sig = tot_curv_p < 0.05
+linear_phrase = ('and the log-linear fit holds: a quadratic temperature term '
+    f'adds nothing significant (p&nbsp;=&nbsp;{tot_curv_p:.2f})') if not _curv_sig else (
+    'though a quadratic term detects some curvature, so the per-10&deg;F figure '
+    'is best read as an average slope across the observed range')
+# matching phrasing for the methodology section
+_p_fmt = f'{tot_curv_p:.2g}'
+method_curv_phrase = (
+    f'for total crime it is not significant (p&nbsp;=&nbsp;{_p_fmt}), so the '
+    'per-10&deg;F figure is a genuine slope and not an average over hidden curvature'
+    if not _curv_sig else
+    f'for total crime it is significant (p&nbsp;=&nbsp;{_p_fmt}): with ~3,400 days even '
+    'slight curvature is detectable, so the per-10&deg;F figure should be read as the '
+    'average slope across the observed temperature range rather than a constant rate at every temperature')
 cold = bs['mean_total'].iloc[0]; hot = bs['mean_total'].iloc[-1]
 pct_cold_hot = (hot/cold-1)*100
 
@@ -92,7 +109,11 @@ wknd_prem=(vb['Weekend']-vb['Weekday']).mean()
 
 # --- geography ---
 nb=pd.read_csv('neighborhood_stats.csv')
-nb_sens=nb.sort_values('pct10',ascending=False)
+n_nb=len(nb); n_nb_sig=int(nb['sig'].sum())   # neighbourhoods significant after FDR
+# Rank the heat-sensitivity story only among neighbourhoods whose slope clears
+# FDR, so the "most sensitive" picks are not winner's-curse noise.
+nb_sig=nb[nb['sig']]
+nb_sens=(nb_sig if len(nb_sig)>=3 else nb).sort_values('pct10',ascending=False)
 top_sens=nb_sens.head(3)
 _dt=nb[nb.neighborhood=='Downtown']['pct10']
 downtown_pct10=_dt.iloc[0] if len(_dt) else top_sens.iloc[2]['pct10']
@@ -100,12 +121,14 @@ nb_vol=nb.sort_values('total',ascending=False)
 pc=pd.read_csv('precinct_stats.csv')
 pc['precinct']=pc['precinct'].astype(str).str.zfill(2)
 pc=pc.sort_values('total',ascending=False)
+n_pc=len(pc); n_pc_sig=int(pc['sig'].sum())   # precincts significant after FDR
 prows=''
 for _,r in pc.iterrows():
+    sig=' <span class="ns">n.s.</span>' if not r.sig else ''
     prows+=f'''<tr><td class="cat">Precinct {r.precinct}</td>
       <td class="num">{int(r.total):,}</td><td class="num">{r.per_day:.1f}</td>
       <td class="num">{r.pct_violent:.0f}%</td>
-      <td class="num strong">+{r.pct10:.1f}%</td><td class="num">{r.r:.2f}</td></tr>'''
+      <td class="num strong">+{r.pct10:.1f}%{sig}</td><td class="num">{r.r:.2f}</td></tr>'''
 
 # --- precipitation (section 08) ---
 pm=pd.read_csv('daily_precip_merged.csv',parse_dates=[0],index_col=0)
@@ -133,7 +156,6 @@ for name,r in cond.iterrows():
 MM=pd.read_csv('daily_master.csv',parse_dates=[0],index_col=0)
 _Tm=MM['temperature_2m_mean'].values; _Prc=MM['precipitation_sum'].values; _Wd=MM['wind_speed_10m_max'].values
 _DOWm=MM.index.dayofweek   # day-of-week nuisance controls
-# wind per +10mph
 # wind per +10mph -> incidents/day at the mean rate
 _vm=MM['Violent'].mean(); _pmn=MM['Property'].mean()
 wind_v=poisson_hac(MM['Violent'].values,[_Tm,_Prc,_Wd],dow=_DOWm); wind_v_eff=_vm*(np.exp(wind_v[0][3]*10)-1); wind_v_p=wind_v[1][3]
@@ -146,8 +168,8 @@ sv=poisson_hac(MM['Violent'].values,[_Tm,_storm],dow=_DOWm); storm_v=(np.exp(sv[
 # unify (violent) — log-link % effects
 yv=MM['Violent'].values
 u_heat=(np.exp(poisson_hac(yv,[_Tm],dow=_DOWm)[0][1]*10)-1)*100
-_wet=(MM['precipitation_sum']>=0.01).astype(float).values
-u_wet=(np.exp(poisson_hac(yv,[_Tm,_wet],dow=_DOWm)[0][2])-1)*100
+_wetM=(MM['precipitation_sum']>=0.01).astype(float).values   # master-frame wet flag (distinct from the precip-frame _wet above)
+u_wet=(np.exp(poisson_hac(yv,[_Tm,_wetM],dow=_DOWm)[0][2])-1)*100
 _hiwind=(_Wd>=_wthr).astype(float)
 u_wind=(np.exp(poisson_hac(yv,[_Tm,_hiwind],dow=_DOWm)[0][2])-1)*100
 u_storm=(np.exp(poisson_hac(yv,[_Tm,_storm],dow=_DOWm)[0][2])-1)*100
@@ -263,8 +285,8 @@ a{{color:var(--cool)}}
 
 <section>
 <h2><span class="n">01 — The headline</span>Warmer days are busier days for Detroit police</h2>
-<p class="lead">Across {ndays:,} days, the daily mean temperature alone explains a large share of the swing in how much crime gets reported. The relationship is strong, positive, and remarkably linear: each additional 10&deg;F is associated with roughly <b>{tot_pct:.0f}% more reported crime</b> (Pearson r&nbsp;=&nbsp;{tot_r:.2f}).</p>
-<figure><img src="{b64('figs/fig1_scatter.png')}" alt="Scatter of daily crime vs temperature"><figcaption>Each dot is one day. Color encodes temperature, from cold blue to hot red.</figcaption></figure>
+<p class="lead">Across {ndays:,} days, the daily mean temperature alone explains a large share of the swing in how much crime gets reported. The relationship is strong, positive, and close to linear ({linear_phrase}): each additional 10&deg;F is associated with roughly <b>{tot_pct:.0f}% more reported crime</b> (Pearson r&nbsp;=&nbsp;{tot_r:.2f}).</p>
+<figure><img src="{b64('figs/fig1_scatter.png')}" alt="Scatter of daily crime vs temperature"><figcaption>Each dot is one day. Color encodes temperature, from cold blue to hot red. The trend line is a descriptive least-squares fit; the headline percentages come from the Poisson model.</figcaption></figure>
 <figure><img src="{b64('figs/fig2_bins.png')}" alt="Average crime by temperature bin"></figure>
 <div class="take"><b>Takeaway.</b> The coldest days (&lt;20&deg;F) average just {cold:.0f} reported incidents; the hottest (75&deg;F+) average {hot:.0f} — a <b>{pct_cold_hot:.0f}% jump</b>. Heat doesn't only change <i>how much</i> crime occurs, but as the next sections show, <i>which kinds</i>.</div>
 </section>
@@ -313,9 +335,9 @@ a{{color:var(--cool)}}
 <h2><span class="n">07 — The map</span>Heat sensitivity is a downtown, riverfront story</h2>
 <p>Crime is not spread evenly across Detroit, and neither is its responsiveness to heat. The density map below traces the familiar geography — corridors along the major avenues, concentration through the greater downtown core, the river defining the southern edge.</p>
 <figure><img src="{b64('figs/fig9_map.png')}" alt="Detroit crime density map"></figure>
-<p>Coloring each neighborhood by its temperature sensitivity reveals a pattern: the <b>entertainment and riverfront districts react most strongly to heat</b>. {top_sens.iloc[0]['neighborhood']} (+{top_sens.iloc[0]['pct10']:.0f}% per 10&deg;F), {top_sens.iloc[1]['neighborhood']} (+{top_sens.iloc[1]['pct10']:.0f}%), and Downtown (+{downtown_pct10:.0f}%) top the list — places where warm weather draws crowds to bars, festivals, and the riverwalk. Quieter residential neighborhoods hover near the citywide +4–5%.</p>
+<p>Coloring each neighborhood by its temperature sensitivity reveals a pattern: the <b>entertainment and riverfront districts react most strongly to heat</b>. Among the {n_nb_sig} of {n_nb} neighborhoods whose slope is statistically distinguishable from zero (Benjamini-Hochberg FDR&nbsp;<&nbsp;0.05), {top_sens.iloc[0]['neighborhood']} (+{top_sens.iloc[0]['pct10']:.0f}% per 10&deg;F), {top_sens.iloc[1]['neighborhood']} (+{top_sens.iloc[1]['pct10']:.0f}%), and Downtown (+{downtown_pct10:.0f}%) top the list — places where warm weather draws crowds to bars, festivals, and the riverwalk. Quieter residential neighborhoods hover near the citywide +4–5%. The ranking is of noisy per-neighborhood point estimates, so read the broad pattern, not the exact order.</p>
 <figure><img src="{b64('figs/fig10_nbmap.png')}" alt="Neighborhood temperature sensitivity map"><figcaption>Each bubble is a neighborhood (≥3,000 incidents): size = total volume, color = % more crime per +10&deg;F.</figcaption></figure>
-<p>At the precinct level the effect is universal but graded — every one of Detroit's precincts shows a positive temperature response, from +{pc['pct10'].min():.1f}% to +{pc['pct10'].max():.1f}% per 10&deg;F.</p>
+<p>At the precinct level the effect is broad but graded — every one of Detroit's precincts shows a positive point estimate (from +{pc['pct10'].min():.1f}% to +{pc['pct10'].max():.1f}% per 10&deg;F), and {n_pc_sig} of {n_pc} are individually significant after FDR correction (the rest, flagged <span class="ns">n.s.</span> below, are positive but not distinguishable from zero on their own).</p>
 <table>
 <thead><tr><th>Precinct</th><th class="num">Incidents</th><th class="num">/day</th>
 <th class="num">% violent</th><th class="num">Per +10&deg;F</th><th class="num">r</th></tr></thead>
@@ -331,7 +353,7 @@ a{{color:var(--cool)}}
 <figure><img src="{b64('figs/fig11_wet_effect.png')}" alt="Temperature-adjusted wet-day effect by crime type"></figure>
 <p>And the suppression is not a fluke of warm rainy days — it holds inside <i>every</i> temperature band, from freezing to sweltering, each wet column sitting a few percent below its dry neighbor.</p>
 <figure><img src="{b64('figs/fig12_strat.png')}" alt="Dry vs wet violent crime within temperature bins"></figure>
-<p><b>Rain and snow do different jobs.</b> Separating precipitation by type — again at equal temperature — uncovers a clean split. Each inch of <b>rain</b> removes about {abs(rs['Violent']['rain']):.0f} violent incidents from the day but leaves theft essentially alone. Each inch of <b>snow</b> does the opposite: it cuts <b>property crime</b> by roughly {abs(rs['Property']['snow']):.0f} incidents — buried cars, shuttered storefronts and empty sidewalks shrink the opportunity for larceny and break-ins — while denting violence only modestly.</p>
+<p><b>Rain and snow do different jobs.</b> Separating precipitation by type — again at equal temperature — uncovers a clean split. The effects are marginal rates per inch (most days see only a fraction of an inch, so these scale a full inch out to the wetter tail): an inch of <b>rain</b> is associated with about {abs(rs['Violent']['rain']):.0f} fewer violent incidents on the day but leaves theft essentially alone. An inch of <b>snow</b> does the opposite: it cuts <b>property crime</b> by roughly {abs(rs['Property']['snow']):.0f} incidents — buried cars, shuttered storefronts and empty sidewalks shrink the opportunity for larceny and break-ins — while denting violence only modestly.</p>
 <figure><img src="{b64('figs/fig13_rainsnow.png')}" alt="Rain vs snow effect by crime type"><figcaption>Regression coefficients per inch of precipitation, controlling for daily mean temperature. "n.s." = not significant.</figcaption></figure>
 <p>For reference, here is the raw picture by sky condition. Snow days look dramatically calmer — but most of that gap is the cold they ride in on, which is why the temperature-controlled figures above tell the more honest story.</p>
 <table>
@@ -377,13 +399,13 @@ a{{color:var(--cool)}}
 <ul>
 <li><b>Crime data.</b> Detroit Police Department incident records via the <a href="https://data.detroitmi.gov/">Detroit Open Data Portal</a> (RMS export). Analysis restricted to {d0}&ndash;{d1}, the window with consistent reporting (2017 onward); sparse legacy records back to 1915 were excluded. Each incident's UTC timestamp was converted to America/Detroit local time before assigning it to a calendar day.</li>
 <li><b>Weather data.</b> Daily mean/max/min 2&nbsp;m air temperature for downtown Detroit (42.33&deg;N, 83.05&deg;W) from the Open-Meteo historical reanalysis archive, in &deg;F. Daily mean temperature is used throughout.</li>
-<li><b>Method.</b> Incidents were aggregated to daily counts overall and per offense category, then joined to weather by date. Each weather effect is fit with a <b>Poisson pseudo-maximum-likelihood</b> model (log link): the coefficients are consistent for the conditional mean even though daily crime is over-dispersed, and a +10&deg;F change is reported as the multiplicative effect <b>(e<sup>10&beta;</sup>&minus;1)&times;100&percnt;</b> (absolute per-day effects are evaluated at the series mean). Pearson and Spearman correlations are also reported as descriptive measures, alongside a deseasonalized check that regresses crime anomalies on temperature anomalies, where each series' smooth seasonal cycle (a low-order harmonic fit on the day-of-year, leap-year safe) has been removed first (kept linear, since anomalies can be negative). Standard errors are robust by construction: because counts are both over-dispersed and serially correlated (residual lag-1 autocorrelation &asymp;&nbsp;0.3), every p-value uses a <b>Newey-West (HAC)</b> sandwich on the Poisson score — a Bartlett kernel with the automatic rule-of-thumb bandwidth (lag&nbsp;=&nbsp;4&middot;(n/100)<sup>2/9</sup>) — which is valid under both, where i.i.d. errors would overstate significance by roughly 2&ndash;3&times; (the standard error for the total-crime series roughly triples from nonrobust to HAC). Every count model on the full daily series also includes <b>day-of-week indicators</b> as nuisance controls, soaking up Detroit's strong weekly cycle so it cannot leak into the weather coefficients; because day-of-week is essentially uncorrelated with temperature the point estimates barely move, but the inference is cleaner (the subsample tests on non-contiguous slices &mdash; weekday/weekend and hot-days-only &mdash; omit them, as full-week indicators do not apply there). Across the per-offense tables, significance flags are <b>Benjamini-Hochberg FDR-corrected</b> within each family of category-level tests (temperature, wet, rain, snow), so an isolated "significant" category among two dozen is not mistaken for a real effect; the headline all-crime row and the four family aggregates are primary hypotheses and keep their raw p-values.</li>
+<li><b>Method.</b> Incidents were aggregated to daily counts overall and per offense category, then joined to weather by date. Each weather effect is fit with a <b>Poisson pseudo-maximum-likelihood</b> model (log link): the coefficients are consistent for the conditional mean even though daily crime is over-dispersed, and a +10&deg;F change is reported as the multiplicative effect <b>(e<sup>10&beta;</sup>&minus;1)&times;100&percnt;</b> (absolute per-day effects are evaluated at the series mean). Pearson and Spearman correlations are also reported as descriptive measures, alongside a deseasonalized check that regresses crime anomalies on temperature anomalies, where each series' smooth seasonal cycle (a low-order harmonic fit on the day-of-year, leap-year safe) has been removed first (kept linear, since anomalies can be negative). Standard errors are robust by construction: because counts are both over-dispersed and serially correlated (residual lag-1 autocorrelation &asymp;&nbsp;0.3), every p-value uses a <b>Newey-West (HAC)</b> sandwich on the Poisson score — a Bartlett kernel with the automatic rule-of-thumb bandwidth (lag&nbsp;=&nbsp;4&middot;(n/100)<sup>2/9</sup>) — which is valid under both, where i.i.d. errors would overstate significance by roughly 2&ndash;3&times; (the standard error for the total-crime series roughly triples from nonrobust to HAC). Every count model on the full daily series also includes <b>day-of-week indicators</b> as nuisance controls, soaking up Detroit's strong weekly cycle so it cannot leak into the weather coefficients; because day-of-week is essentially uncorrelated with temperature the point estimates barely move, but the inference is cleaner (the subsample tests on non-contiguous slices &mdash; weekday/weekend and hot-days-only &mdash; omit them, as full-week indicators do not apply there). The log-linear temperature term is checked for curvature by adding a centered quadratic term per category: {method_curv_phrase}. Across the per-offense tables, significance flags are <b>Benjamini-Hochberg FDR-corrected</b> within each family of category-level tests (temperature, wet, rain, snow), and the per-neighborhood and per-precinct temperature slopes are FDR-corrected within their own families too, so an isolated "significant" unit among two dozen is not mistaken for a real effect; the headline all-crime row and the four family aggregates are primary hypotheses and keep their raw p-values. The section-level claims that are not part of those category families &mdash; the wind, storm, and heat-wave tests, and the family-aggregate wet/rain/snow effects &mdash; are treated as pre-specified primary hypotheses and are <i>not</i> multiplicity-adjusted across sections; readers weighing the full set of ~20 such tests should bear that wider family in mind. Regression-line overlays in the scatter figures (figs&nbsp;1 and&nbsp;6) are descriptive ordinary-least-squares fits for visual orientation; the quoted percentage effects always come from the Poisson model, so a fitted line's slope and the body's per-10&deg;F figure need not coincide.</li>
 <li><b>Time of day.</b> The hourly analysis joins each incident to Open-Meteo's hourly 2&nbsp;m temperature for the matching local clock-hour. "Hot" and "cold" days are the warmest and coldest thirds of days by daily mean temperature. "Violent" is a broad violent/interpersonal grouping: assault, aggravated assault, weapons, robbery, homicide, sexual/sex offenses, arson, disorderly conduct, and obstructing police &mdash; note this reaches beyond the strict UCR violent definition to include arson and the confrontational public-order offenses (disorderly conduct, obstructing police), which together are only ~4&percnt; of the group and do not drive its results. "Property" groups larceny, damage, stolen vehicle, burglary, and stolen property. Records whose timestamp falls exactly on midnight (00:00:00) or noon (12:00:00) are unknown-time placeholders &mdash; together ~5% of incidents, far above chance &mdash; and are excluded from all hour-of-day analyses (but retained in daily counts, where the calendar day is still valid).</li>
-<li><b>Geography.</b> Incidents are geocoded to the nearest street intersection (visible as faint gridding in the density map). Neighborhood sensitivity is computed only for neighborhoods with &ge;3,000 incidents; precinct figures cover all 11 precincts. Bubble positions are median incident coordinates, not official boundaries.</li>
+<li><b>Geography.</b> Incidents are geocoded to the nearest street intersection (visible as faint gridding in the density map). Neighborhood sensitivity is computed only for neighborhoods with &ge;3,000 incidents; precinct figures cover all 11 precincts. Each neighborhood and precinct temperature slope carries its own HAC p-value, FDR-corrected within its set; units that do not clear FDR&nbsp;<&nbsp;0.05 are flagged <span class="ns">n.s.</span> and the "most heat-sensitive" ranking is drawn only from those that do, since ranking noisy point estimates otherwise favours whichever unit's sampling error pointed up. Bubble positions are median incident coordinates, not official boundaries.</li>
 <li><b>Precipitation.</b> Daily precipitation, rain, and snowfall totals (inches) and WMO weather codes come from the same Open-Meteo archive. Because precipitation co-varies with temperature, all precipitation effects come from the same Poisson model with daily mean temperature included as a control (and, for the rain-vs-snow split, rain and snowfall amounts entered separately); the by-condition table is raw and is labelled as temperature-confounded. A "wet day" is &ge;0.01&nbsp;in of precipitation.</li>
 <li><b>Wind &amp; storms.</b> Daily maximum 10&nbsp;m wind speed (mph) from the same archive. Wind effects come from regressions controlling for both temperature and precipitation. "Storm days" are the upper-decile wind days (&ge;{_wthr:.0f}&nbsp;mph) or heavy-rain days (&gt;0.5&nbsp;in); the ERA5 archive does not flag thunderstorms separately, so no lightning/thunder classification is used.</li>
-<li><b>Heat waves.</b> Defined as 3+ consecutive days with a daily high &ge;85&deg;F (using daily maximum, not mean, temperature). The cumulative test regresses daily crime (Poisson, log link) on the day's maximum temperature plus an indicator for being on day&nbsp;3 or later of a wave, so any heat-wave coefficient is the effect <i>beyond</i> that day's heat. Because this test runs on the hot-days-only sub-sample &mdash; which is not a contiguous daily series &mdash; it uses heteroskedasticity-robust (White) standard errors rather than the HAC lags used elsewhere.</li>
-<li><b>Correlation, not causation.</b> These are observational associations. Heat plausibly increases crime through more time outdoors, more social contact, and the well-studied link between temperature and aggression — but daylight hours, school calendars, and seasonal routines move with temperature and are not separately controlled here (the anomaly analysis mitigates, not eliminates, this).</li>
+<li><b>Heat waves.</b> Defined as 3+ consecutive days with a daily high &ge;85&deg;F (using daily maximum, not mean, temperature). The cumulative test regresses daily crime (Poisson, log link) on the day's maximum temperature plus an indicator for being on day&nbsp;3 or later of a wave, so any heat-wave coefficient is the effect <i>beyond</i> that day's heat. Because this test runs on the hot-days-only sub-sample &mdash; which is not a contiguous daily series &mdash; it uses heteroskedasticity-robust White standard errors (the HC3 variant, whose leverage correction keeps the small ~100-row sub-sample well-calibrated) rather than the HAC lags used elsewhere.</li>
+<li><b>Correlation, not causation.</b> These are observational associations. Heat plausibly increases crime through more time outdoors, more social contact, and the well-studied link between temperature and aggression — but daylight hours, school calendars, and seasonal routines move with temperature and are not separately controlled here (the anomaly analysis mitigates, not eliminates, this). The deseasonalizing removes only the smooth within-year cycle, not any multi-year trend or one-off shock (e.g. 2020); because temperature anomalies are essentially uncorrelated with the calendar year, such residual structure adds noise to the crime anomaly rather than correlated signal, so it biases the deseasonalized correlation <i>toward</i> zero &mdash; the reported anomaly effect is, if anything, conservative.</li>
 <li><b>Reporting effects.</b> Figures count <i>reported</i> incidents. Categories such as fraud reflect when a report was filed rather than when conduct occurred, which dampens any weather signal. Recent weeks may be revised upward as cases are entered, so not-yet-complete trailing days (any final day whose count falls below half the preceding four-week median) are dropped from the analysis window rather than entering the regressions as artificial near-zero days.</li>
 </ul>
 </section>

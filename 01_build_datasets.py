@@ -156,12 +156,19 @@ for c in ['total_crimes'] + big:
     beta_T, p = b_[1], p_[1]
     slope = s.mean() * (np.exp(beta_T) - 1)         # incidents/°F at the mean (reference)
     pct_per_10F = (np.exp(10 * beta_T) - 1) * 100
+    # Log-linearity check: add a centered quadratic temperature term and test it.
+    # Centering (temp - mean) keeps the squared regressor well-conditioned; a
+    # non-significant curv_p means the log-linear temperature response the model
+    # reports is not hiding meaningful curvature.
+    tcen = temp.values - temp.values.mean()
+    _, pq_ = poisson_hac(s.values, [tcen, tcen ** 2], dow=temp.index.dayofweek)
+    curv_p = pq_[2]
     sa = climo_anom(s); ta = climo_anom(temp)
     ra, _ = stats.pearsonr(ta, sa)
     _, pa_ = ols(sa.values, [ta.values]); pa = pa_[1]
     rows.append(dict(category=c, total=int(s.sum()), mean_per_day=round(s.mean(), 2),
         pearson_r=r, spearman=rho, p=p, slope_per_F=slope,
-        pct_per_10F=pct_per_10F, anom_r=ra, anom_p=pa))
+        pct_per_10F=pct_per_10F, curv_p=curv_p, anom_r=ra, anom_p=pa))
 cstat = pd.DataFrame(rows)
 # Benjamini-Hochberg FDR across the per-category temperature tests (the headline
 # total_crimes row is a single primary hypothesis and keeps its raw p-value).
@@ -204,11 +211,18 @@ for nb in nb_vol[nb_vol >= 3000].index:
     r, _ = stats.pearsonr(temp, d)
     # Poisson log-link with HAC SEs, matching the rest of the pipeline (the
     # reindexed series is a contiguous daily series, so HAC lags are valid).
-    bc, _ = poisson_hac(d.values, [temp.values], dow=temp.index.dayofweek)
+    # Keep the temperature-slope p-value so the per-neighbourhood sensitivities
+    # carry uncertainty rather than being ranked on point estimates alone.
+    bc, pc_ = poisson_hac(d.values, [temp.values], dow=temp.index.dayofweek)
     nb_rows.append(dict(neighborhood=nb, total=len(sub), per_day=d.mean(),
         lat=sub.latitude.median(), lon=sub.longitude.median(),
-        r=r, pct10=(np.exp(10 * bc[1]) - 1) * 100))
-pd.DataFrame(nb_rows).sort_values('total', ascending=False).to_csv('neighborhood_stats.csv', index=False)
+        r=r, pct10=(np.exp(10 * bc[1]) - 1) * 100, p=pc_[1]))
+nb_df = pd.DataFrame(nb_rows)
+# FDR across neighbourhoods so a "most heat-sensitive" ranking is not just the
+# winner's-curse pick whose noise happened to point up.
+nb_df['q'] = bh(nb_df['p'].values)
+nb_df['sig'] = nb_df['q'] < 0.05
+nb_df.sort_values('total', ascending=False).to_csv('neighborhood_stats.csv', index=False)
 
 geo = geo.copy(); geo['police_precinct'] = geo['police_precinct'].astype(str).str.zfill(2)
 pc_rows = []
@@ -218,11 +232,16 @@ for pc, sub in geo.groupby('police_precinct'):
     d = sub.groupby('date').size(); d.index = pd.to_datetime(d.index)
     d = d.reindex(temp.index).fillna(0)
     r, _ = stats.pearsonr(temp, d)
-    bc, _ = poisson_hac(d.values, [temp.values], dow=temp.index.dayofweek)   # Poisson log-link, HAC SEs, day-of-week controlled
+    bc, pc_ = poisson_hac(d.values, [temp.values], dow=temp.index.dayofweek)   # Poisson log-link, HAC SEs, day-of-week controlled
     pc_rows.append(dict(precinct=pc, total=len(sub), per_day=round(d.mean(), 1),
         pct_violent=round((sub.family == 'Violent').mean() * 100, 1),
-        pct10=round((np.exp(10 * bc[1]) - 1) * 100, 1), r=round(r, 2)))
-pd.DataFrame(pc_rows).sort_values('total', ascending=False).to_csv('precinct_stats.csv', index=False)
+        pct10=round((np.exp(10 * bc[1]) - 1) * 100, 1), r=round(r, 2), p=pc_[1]))
+pc_df = pd.DataFrame(pc_rows)
+# FDR across precincts, so "every precinct responds to heat" is backed by a
+# significance count, not just same-signed point estimates.
+pc_df['q'] = bh(pc_df['p'].values)
+pc_df['sig'] = pc_df['q'] < 0.05
+pc_df.sort_values('total', ascending=False).to_csv('precinct_stats.csv', index=False)
 
 # --------------------------------------------------------- time-of-day aggregates
 q = temp.quantile([1/3, 2/3])
@@ -250,7 +269,7 @@ ww = {}
 for lab, sub in [('Weekday', dd[~dd.wknd]), ('Weekend', dd[dd.wknd])]:
     r, _ = stats.pearsonr(sub.temp, sub.n)
     # Weekday-only / weekend-only rows are NOT a contiguous daily series, so the
-    # HAC autocovariance lags are meaningless -> White/HC0 robust SEs (hac=False).
+    # HAC autocovariance lags are meaningless -> White/HC3 robust SEs (hac=False).
     bc, _ = poisson_hac(sub.n.values, [sub.temp.values], hac=False)
     ww[lab] = dict(r=r, mean=sub.n.mean(),
         slope_per_F=sub.n.mean() * (np.exp(bc[1]) - 1),

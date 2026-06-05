@@ -57,14 +57,24 @@ step 1.
 - Daily crime series are autocorrelated and over-dispersed, so all p-values and
   significance flags use **Newey-West (HAC)** robust standard errors rather than
   i.i.d. errors, and families of tests are corrected for multiple comparisons with
-  **Benjamini-Hochberg FDR** q-values.
+  **Benjamini-Hochberg FDR** q-values (including the per-neighborhood and
+  per-precinct temperature slopes, so the "most heat-sensitive" rankings are
+  drawn only from units that clear FDR rather than from noisy point estimates).
+  Section-level tests outside those category families (wind, storm, heat wave,
+  family-aggregate precipitation) are treated as primary hypotheses and are not
+  cross-section multiplicity-adjusted.
+- The log-linear temperature response is checked for curvature with a centered
+  quadratic term; with ~3,400 days slight curvature is detectable for total
+  crime, so per-10°F effects are reported as the average slope across the
+  observed range, not a constant rate at every temperature.
 - Every count model on the full daily series also carries **day-of-week
   indicators** as nuisance controls, so Detroit's strong weekly cycle cannot leak
   into the weather coefficients. Day-of-week is essentially uncorrelated with
   temperature, so this barely moves the point estimates but tightens the
   inference. The non-contiguous subsample tests (weekday-vs-weekend and
   hot-days-only heat waves) omit them — full-week indicators don't apply to a
-  partial-week slice — and fall back to White/HC0 robust errors.
+  partial-week slice — and fall back to White (HC3) robust errors, whose
+  leverage correction keeps the small hot-days sub-sample well-calibrated.
 - Incidents stamped exactly at midnight or noon are unknown-time placeholders and
   are excluded from hour-of-day analyses (kept in daily counts).
 - Every intermediate file is plain text (CSV / JSON) — no pickle or other
