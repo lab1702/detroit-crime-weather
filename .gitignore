@@ -1,0 +1,28 @@
+# ─────────────────────────────────────────────────────────────────────────
+# Everything below is produced by the pipeline (00→02 + build_*). It is fully
+# regenerable with `bash run_all.sh`, so none of it is tracked.
+# ─────────────────────────────────────────────────────────────────────────
+
+# Raw downloads (00_fetch_data.py) + all derived datasets (01_build_datasets.py)
+*.csv
+*.json
+
+# Figures (02_make_figures.py)
+figs/
+
+# Rendered pages (build_report.py / build_interactive.py / build_index.py)
+*.html
+
+# Never commit pickles or other code-bearing data formats
+*.pkl
+*.pickle
+*.feather
+*.parquet
+
+# Python / tooling cruft
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+venv/
+.DS_Store
