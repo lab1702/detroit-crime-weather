@@ -15,7 +15,7 @@ import json
 import numpy as np
 import pandas as pd
 from scipy import stats
-from hac import ols, poisson_hac, bh, deseasonalize
+from hac import poisson_hac, bh, deseasonalize, harmonics
 
 WIN_START, WIN_END = "2017-01-01", "2026-06-04"   # [start, end) local time
 VIOL = {'AGGRAVATED ASSAULT', 'ASSAULT', 'WEAPONS OFFENSES', 'ROBBERY', 'HOMICIDE',
@@ -72,11 +72,16 @@ print(f"  {len(inc):,} incidents  ({inc['ph_time'].sum():,} placeholder-time, "
 # spurious near-zero point and depress recent-day counts to zero after the
 # reindex(...).fillna(0) used downstream. Walk back from the end and trim any
 # trailing day under half the reference median, stopping at the first full day so
-# genuine low-count interior days are left untouched. The reference is a 4-week
-# window ending a week before the last day, so the (possibly under-reported)
-# trailing days don't drag the threshold down and mask their own incompleteness.
+# genuine low-count interior days are left untouched. The reference is a 90-day
+# window ending 30 days before the last day: RMS reporting lag runs weeks, not
+# days, so a window ending only a week back can itself sit inside the
+# under-reported tail and drag the threshold down — masking the very
+# incompleteness it is meant to catch. Starting the reference 30 days back keeps
+# it outside the plausible stabilisation horizon while staying recent enough to
+# track the current season (a 90-day span stays well within the ~20% seasonal
+# swing, so the 0.5x cut never false-trims a genuine low-season day).
 _dt_tot = inc.groupby('date').size().sort_index()
-_ref = _dt_tot.iloc[-35:-7].median()
+_ref = _dt_tot.iloc[-120:-30].median()
 _cut = _dt_tot.index.max()
 for _d in reversed(_dt_tot.index):
     if _dt_tot[_d] < 0.5 * _ref:
@@ -99,8 +104,21 @@ wd = wd.loc[wd.index <= _cut]
 wf = wf.loc[wf.index <= _cut]
 wh = wh[wh['time'].dt.normalize() <= _cut]
 temp = wd['temperature_2m_mean']
+# The daily weather index must be strictly one-day-apart and contiguous: the HAC
+# lag kernel treats adjacent rows as one-day neighbours, and the reindex(temp.index)
+# .fillna(0) used downstream only legitimately fills *interior* zero-incident days
+# (a true zero in a ~230/day city is itself a data gap, but a missing weather day
+# would silently misalign the lags). Assert it once here rather than trust it.
+_step = temp.index.to_series().diff().dropna()
+assert (_step == pd.Timedelta(days=1)).all(), (
+    "weather daily index is not a contiguous one-day series; HAC lags and "
+    "reindex(...).fillna(0) downstream assume no date gaps")
 # Smooth, leap-year-safe harmonic deseasonalization (shared with the figures).
 climo_anom = deseasonalize
+# Seasonal Fourier columns on the daily index, shared by every within-season test
+# (entered as nuisance controls in the count model, the one-stage replacement for
+# deseasonalizing two series and regressing their residuals on each other).
+Hsea = harmonics(temp.index)
 
 
 # --------------------------------------------------- daily category / family tables
@@ -165,9 +183,17 @@ for c in ['total_crimes'] + big:
     tcen = temp.values - temp.values.mean()
     _, pq_ = poisson_hac(s.values, [tcen, tcen ** 2], dow=temp.index.dayofweek)
     curv_p = pq_[2]
+    # Within-season significance: the SAME Poisson count model with the smooth
+    # seasonal cycle entered as harmonic nuisance controls (plus day-of-week), so
+    # the temperature effect is identified only from day-to-day departures from
+    # the season. By Frisch-Waugh-Lovell this matches deseasonalizing both series,
+    # but as one stage it carries correctly-calibrated HAC SEs instead of treating
+    # an estimated seasonal residual as a known regressor. ra below stays a
+    # descriptive two-step correlation (for the scatter/headline, not a test).
     sa = climo_anom(s); ta = climo_anom(temp)
     ra, _ = stats.pearsonr(ta, sa)
-    _, pa_ = ols(sa.values, [ta.values]); pa = pa_[1]
+    _, pa_ = poisson_hac(s.values, [temp.values, *Hsea.T], dow=temp.index.dayofweek)
+    pa = pa_[1]
     rows.append(dict(category=c, total=int(s.sum()), mean_per_day=round(s.mean(), 2),
         pearson_r=r, spearman=rho, p=p, slope_per_F=slope,
         pct_per_10F=pct_per_10F, curv_p=curv_p, anom_r=ra, anom_p=pa))
@@ -177,6 +203,11 @@ cstat = pd.DataFrame(rows)
 _catmask = cstat['category'] != 'total_crimes'
 cstat['p_fdr'] = cstat['p']
 cstat.loc[_catmask, 'p_fdr'] = bh(cstat.loc[_catmask, 'p'].values)
+# The within-season (anomaly) test is its own family of per-category hypotheses,
+# so FDR-correct it on the same footing as the raw temperature slope; the
+# total_crimes row keeps its raw value as a single primary hypothesis.
+cstat['anom_p_fdr'] = cstat['anom_p']
+cstat.loc[_catmask, 'anom_p_fdr'] = bh(cstat.loc[_catmask, 'anom_p'].values)
 cstat.to_csv('category_stats.csv', index=False)
 
 # ----------------------------------------------- category_precip.csv (temp-controlled)
@@ -314,6 +345,13 @@ tbin_s = pd.cut(temp, bins=TBINS, labels=TLABELS)
 # missing weather day surfaces as a NaN here rather than silently shifting rows
 # when y (reindexed to temp.index) and these arrays are column-stacked.
 wfa = wf.reindex(temp.index)
+# Surface a missing weather day legibly: a NaN here would otherwise reach the
+# Poisson fit and crash with an opaque statsmodels error (or, worse, be silently
+# dropped and misalign the column-stacked regressors against y).
+_miss = int(wfa[['rain_sum', 'snowfall_sum', 'precipitation_sum']].isna().any(axis=1).sum())
+if _miss:
+    raise SystemExit(f"{_miss} weather day(s) missing from the full-weather frame after "
+                     "reindexing to the daily index — cannot build profiles cleanly")
 T = temp.values; R = wfa['rain_sum'].values; S = wfa['snowfall_sum'].values
 WET = (wfa['precipitation_sum'] >= 0.01).astype(float).values
 DOW = temp.index.dayofweek   # nuisance day-of-week controls, shared by every profile

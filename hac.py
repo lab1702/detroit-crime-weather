@@ -17,11 +17,17 @@ mean and (b) strongly serially correlated (residual lag-1 autocorrelation
   autocorrelation ~0.26), so absorbing it sharpens every weather coefficient and
   removes most of the serial correlation the HAC kernel would otherwise carry.
 
-* ``ols`` — retained only for the deseasonalised "anomaly" check, where the
-  series is a continuous day-of-year residual that can go negative and a count
-  model does not apply; it carries the same Newey-West HAC errors.
+* ``harmonics`` — leap-year-safe annual Fourier columns (no intercept), exposed
+  so the smooth seasonal cycle can be dropped straight into ``poisson_hac`` as
+  nuisance controls. That one-stage within-season test (temperature plus the
+  harmonics in a single count model) is the properly-calibrated alternative to
+  deseasonalising ``y`` and a regressor separately and then regressing the two
+  residuals on each other: by Frisch-Waugh-Lovell the temperature coefficient is
+  identical, but folding the seasonal terms into the one fit keeps the HAC
+  standard errors honest instead of treating an estimated seasonal residual as a
+  known regressor.
 
-Both HAC estimators assume rows are in time order AND contiguous (no date
+The Poisson HAC estimator assumes rows are in time order AND contiguous (no date
 gaps): the lag terms treat adjacent rows as one-day-apart neighbours.  For a
 filtered / non-contiguous frame (e.g. hot-days-only sub-samples) pass
 ``hac=False`` to ``poisson_hac`` to fall back to White (heteroskedasticity-only)
@@ -43,7 +49,8 @@ HC3 sandwich directly in ``_poisson_hc3_cov`` rather than trusting the keyword.
 ``deseasonalize`` removes a smooth seasonal cycle (harmonic/Fourier regression
 on the day-of-year) and returns anomalies; it is leap-year safe and far more
 stable than a raw per-calendar-day mean estimated from only ~9 observations
-per day.
+per day. ``harmonics`` exposes the same Fourier design (without the intercept)
+for use as in-model seasonal controls.
 
 These are thin wrappers over statsmodels (the ``hac=False`` path additionally
 forms its own HC3 sandwich, since statsmodels' GLM does not); they fix the
@@ -62,15 +69,25 @@ def _newey_west_lags(n):
     return max(1, int(4 * (n / 100) ** (2 / 9)))
 
 
-def ols(y, X):
-    """Linear OLS with Newey-West (HAC) standard errors. Returns (beta, pvalues)."""
-    Xc = sm.add_constant(np.column_stack(X))
-    res = sm.OLS(np.asarray(y, dtype=float), Xc).fit(
-        cov_type="HAC",
-        cov_kwds={"maxlags": _newey_west_lags(len(y)), "use_correction": False},
-        use_t=True,
-    )
-    return res.params, res.pvalues
+def harmonics(index, n_harmonics=3):
+    """Annual Fourier regressors (no intercept) for a daily ``DatetimeIndex``.
+
+    Returns an ``(n, 2 * n_harmonics)`` array of ``sin(k*phi), cos(k*phi)`` columns
+    where ``phi`` is the leap-year-safe fraction of the year elapsed (each year's
+    actual length, 365 or 366). Drop these straight into ``poisson_hac`` alongside
+    a weather regressor to identify its effect *within* the smooth seasonal cycle
+    — a single, properly-calibrated count model rather than a two-step
+    deseasonalize-then-regress (which would treat the estimated seasonal residual
+    as a known regressor and understate the standard error).
+    """
+    doy = index.dayofyear.to_numpy(dtype=float)
+    year_len = np.where(index.is_leap_year, 366.0, 365.0)
+    phi = 2.0 * np.pi * doy / year_len
+    cols = []
+    for k in range(1, n_harmonics + 1):
+        cols.append(np.sin(k * phi))
+        cols.append(np.cos(k * phi))
+    return np.column_stack(cols)
 
 
 def _dow_dummies(dow):
@@ -169,14 +186,7 @@ def deseasonalize(s, n_harmonics=3):
     index is preserved so callers can keep aligning by position.
     """
     idx = s.index
-    doy = idx.dayofyear.to_numpy(dtype=float)
-    year_len = np.where(idx.is_leap_year, 366.0, 365.0)
-    phi = 2.0 * np.pi * doy / year_len
-    cols = [np.ones_like(phi)]
-    for k in range(1, n_harmonics + 1):
-        cols.append(np.sin(k * phi))
-        cols.append(np.cos(k * phi))
-    X = np.column_stack(cols)
+    X = np.column_stack([np.ones(len(idx)), harmonics(idx, n_harmonics)])
     y = np.asarray(s, dtype=float)
     beta, *_ = np.linalg.lstsq(X, y, rcond=None)
     return pd.Series(y - X @ beta, index=idx)
