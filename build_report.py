@@ -111,10 +111,14 @@ for _,r in pc.iterrows():
 pm=pd.read_csv('daily_precip_merged.csv',parse_dates=[0],index_col=0)
 _T=pm['temperature_2m_mean'].values
 def _ols(y,X):
+    """OLS with Newey-West (HAC) standard errors; see 01_build_datasets.py."""
     X=np.column_stack([np.ones(len(y))]+X); beta,_,_,_=np.linalg.lstsq(X,y,rcond=None)
-    resid=y-X@beta; n,k=X.shape; s2=(resid@resid)/(n-k)
-    se=np.sqrt(np.diag(s2*np.linalg.inv(X.T@X))); t=beta/se
-    return beta,2*(1-stats.t.cdf(np.abs(t),n-k))
+    resid=y-X@beta; n,k=X.shape; XtX_inv=np.linalg.inv(X.T@X)
+    u=X*resid[:,None]; L=max(1,int(4*(n/100)**(2/9))); S=u.T@u
+    for lag in range(1,L+1):
+        G=u[lag:].T@u[:-lag]; S+=(1-lag/(L+1))*(G+G.T)
+    se=np.sqrt(np.diag(XtX_inv@S@XtX_inv))
+    return beta,2*(1-stats.t.cdf(np.abs(beta/se),n-k))
 _wet=(pm['precipitation_sum']>=0.01).astype(float).values
 wet_eff={}
 for f in ['total','Violent','Property','Other']:
@@ -135,8 +139,13 @@ for name,r in cond.iterrows():
 MM=pd.read_csv('daily_master.csv',parse_dates=[0],index_col=0)
 _Tm=MM['temperature_2m_mean'].values; _Prc=MM['precipitation_sum'].values; _Wd=MM['wind_speed_10m_max'].values
 def _o(y,X):
+    """OLS with Newey-West (HAC) standard errors; see 01_build_datasets.py."""
     X=np.column_stack([np.ones(len(y))]+X); beta,_,_,_=np.linalg.lstsq(X,y,rcond=None)
-    resid=y-X@beta; n,k=X.shape; s2=(resid@resid)/(n-k); se=np.sqrt(np.diag(s2*np.linalg.inv(X.T@X)))
+    resid=y-X@beta; n,k=X.shape; XtX_inv=np.linalg.inv(X.T@X)
+    u=X*resid[:,None]; L=max(1,int(4*(n/100)**(2/9))); S=u.T@u
+    for lag in range(1,L+1):
+        G=u[lag:].T@u[:-lag]; S+=(1-lag/(L+1))*(G+G.T)
+    se=np.sqrt(np.diag(XtX_inv@S@XtX_inv))
     return beta,2*(1-stats.t.cdf(np.abs(beta/se),n-k))
 # wind per +10mph
 wind_v=_o(MM['Violent'].values,[_Tm,_Prc,_Wd]); wind_v_eff=wind_v[0][3]*10; wind_v_p=wind_v[1][3]
@@ -376,8 +385,8 @@ a{{color:var(--cool)}}
 <ul>
 <li><b>Crime data.</b> Detroit Police Department incident records via the <a href="https://data.detroitmi.gov/">Detroit Open Data Portal</a> (RMS export). Analysis restricted to {d0}&ndash;{d1}, the window with consistent reporting (2017 onward); sparse legacy records back to 1915 were excluded. Each incident's UTC timestamp was converted to America/Detroit local time before assigning it to a calendar day.</li>
 <li><b>Weather data.</b> Daily mean/max/min 2&nbsp;m air temperature for downtown Detroit (42.33&deg;N, 83.05&deg;W) from the Open-Meteo historical reanalysis archive, in &deg;F. Daily mean temperature is used throughout.</li>
-<li><b>Method.</b> Incidents were aggregated to daily counts overall and per offense category, then joined to weather by date. We report Pearson and Spearman correlations, an OLS slope (incidents per &deg;F, also expressed as % of each category's mean per +10&deg;F), and a deseasonalized check using day-of-year climatological anomalies.</li>
-<li><b>Time of day.</b> The hourly analysis joins each incident to Open-Meteo's hourly 2&nbsp;m temperature for the matching local clock-hour. "Hot" and "cold" days are the warmest and coldest thirds of days by daily mean temperature. "Violent" groups assault, aggravated assault, weapons, robbery, homicide, sexual/sex offenses, arson, disorderly conduct, and obstructing police; "property" groups larceny, damage, stolen vehicle, burglary, and stolen property.</li>
+<li><b>Method.</b> Incidents were aggregated to daily counts overall and per offense category, then joined to weather by date. We report Pearson and Spearman correlations, an OLS slope (incidents per &deg;F, also expressed as % of each category's mean per +10&deg;F), and a deseasonalized check using day-of-year climatological anomalies. Because daily crime counts are serially correlated (residual lag-1 autocorrelation &asymp;&nbsp;0.3), all p-values and significance flags use <b>Newey-West (HAC)</b> standard errors with a Bartlett kernel and the standard plug-in bandwidth, rather than i.i.d. errors that would overstate significance by roughly 2&times;.</li>
+<li><b>Time of day.</b> The hourly analysis joins each incident to Open-Meteo's hourly 2&nbsp;m temperature for the matching local clock-hour. "Hot" and "cold" days are the warmest and coldest thirds of days by daily mean temperature. "Violent" groups assault, aggravated assault, weapons, robbery, homicide, sexual/sex offenses, arson, disorderly conduct, and obstructing police; "property" groups larceny, damage, stolen vehicle, burglary, and stolen property. Records whose timestamp falls exactly on midnight (00:00:00) or noon (12:00:00) are unknown-time placeholders &mdash; together ~5% of incidents, far above chance &mdash; and are excluded from all hour-of-day analyses (but retained in daily counts, where the calendar day is still valid).</li>
 <li><b>Geography.</b> Incidents are geocoded to the nearest street intersection (visible as faint gridding in the density map). Neighborhood sensitivity is computed only for neighborhoods with &ge;3,000 incidents; precinct figures cover all 11 precincts. Bubble positions are median incident coordinates, not official boundaries.</li>
 <li><b>Precipitation.</b> Daily precipitation, rain, and snowfall totals (inches) and WMO weather codes come from the same Open-Meteo archive. Because precipitation co-varies with temperature, all precipitation effects are reported from OLS regressions that include daily mean temperature as a control (and, for the rain-vs-snow split, rain and snowfall amounts entered separately); the by-condition table is raw and is labelled as temperature-confounded. A "wet day" is &ge;0.01&nbsp;in of precipitation.</li>
 <li><b>Wind &amp; storms.</b> Daily maximum 10&nbsp;m wind speed (mph) from the same archive. Wind effects come from regressions controlling for both temperature and precipitation. "Storm days" are the upper-decile wind days (&ge;{_wthr:.0f}&nbsp;mph) or heavy-rain days (&gt;0.5&nbsp;in); the ERA5 archive does not flag thunderstorms separately, so no lightning/thunder classification is used.</li>

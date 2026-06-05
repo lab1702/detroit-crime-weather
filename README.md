@@ -49,6 +49,10 @@ step 1.
   Detroit (42.33 N, 83.05 W), temperatures in °F, precipitation in inches.
 - All precipitation, wind and heat-wave effects are reported from OLS regressions
   that **control for temperature**, so the weather signal is not just the season.
+- Daily crime series are autocorrelated, so all p-values and significance flags use
+  **Newey-West (HAC)** standard errors rather than i.i.d. errors.
+- Incidents stamped exactly at midnight or noon are unknown-time placeholders and
+  are excluded from hour-of-day analyses (kept in daily counts).
 - Every intermediate file is plain text (CSV / JSON) — no pickle or other
   code-bearing formats are read or written anywhere in the pipeline.
 

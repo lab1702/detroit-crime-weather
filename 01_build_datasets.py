@@ -31,13 +31,28 @@ def family(c):
 
 
 def ols(y, X, want_p=True):
-    """OLS with intercept; returns (beta, pvalues)."""
+    """OLS with intercept and Newey-West (HAC) standard errors.
+
+    Daily crime series are strongly serially correlated (residual lag-1 auto-
+    correlation ~0.3), so i.i.d. OLS standard errors understate uncertainty by
+    ~2x and overstate significance. We use a Bartlett-kernel HAC estimator with
+    the Newey-West (1994) plug-in bandwidth. Rows must be in time order (they
+    are: every frame here is indexed by a contiguous daily date range).
+    Returns (beta, pvalues).
+    """
     X = np.column_stack([np.ones(len(y))] + X)
     beta, *_ = np.linalg.lstsq(X, y, rcond=None)
     resid = y - X @ beta
     n, k = X.shape
-    s2 = (resid @ resid) / (n - k)
-    se = np.sqrt(np.diag(s2 * np.linalg.inv(X.T @ X)))
+    XtX_inv = np.linalg.inv(X.T @ X)
+    u = X * resid[:, None]                      # n x k score contributions
+    L = max(1, int(4 * (n / 100) ** (2 / 9)))   # Newey-West plug-in lag
+    S = u.T @ u
+    for lag in range(1, L + 1):
+        w = 1 - lag / (L + 1)                    # Bartlett weight
+        G = u[lag:].T @ u[:-lag]
+        S += w * (G + G.T)
+    se = np.sqrt(np.diag(XtX_inv @ S @ XtX_inv))
     p = 2 * (1 - stats.t.cdf(np.abs(beta / se), n - k))
     return beta, p
 
@@ -60,7 +75,14 @@ inc['dow'] = dt.dt.dayofweek
 inc['is_weekend'] = inc['dow'].isin([5, 6])
 inc['cat'] = inc['offense_category'].str.strip()
 inc['family'] = inc['cat'].map(family)
-print(f"  {len(inc):,} incidents")
+# Unknown-time records are dumped onto exactly midnight or noon: 00:00:00 holds
+# ~2.8% of all incidents and 12:00:00 ~2% (vs ~0.07% expected), inflating hours
+# 0 and 12. These placeholder stamps corrupt any hour-of-day analysis, so we
+# flag them and exclude them from hour-level aggregates only — the calendar DAY
+# is still valid, so daily counts keep every incident.
+inc['ph_time'] = (dt.dt.hour.isin([0, 12]) & (dt.dt.minute == 0) & (dt.dt.second == 0))
+print(f"  {len(inc):,} incidents  ({inc['ph_time'].sum():,} placeholder-time, "
+      f"excluded from hour-of-day analysis only)")
 
 # ------------------------------------------------------------------ weather load
 wd = pd.read_csv('detroit_weather.csv', parse_dates=['time']).set_index('time')
@@ -119,10 +141,13 @@ big = totals[totals >= 2000].index.tolist()
 rows = []
 for c in ['total_crimes'] + big:
     s = (daily[c] if c == 'total_crimes' else dcat[c]).reindex(temp.index).fillna(0).astype(float)
-    r, p = stats.pearsonr(temp, s)
+    r, _ = stats.pearsonr(temp, s)            # descriptive correlation
     rho, _ = stats.spearmanr(temp, s)
-    slope, _ = np.polyfit(temp, s, 1)
-    sa = climo_anom(s); ra, pa = stats.pearsonr(climo_anom(temp), sa)
+    b_, p_ = ols(s.values, [temp.values])     # slope + HAC p-value
+    slope, p = b_[1], p_[1]
+    sa = climo_anom(s); ta = climo_anom(temp)
+    ra, _ = stats.pearsonr(ta, sa)
+    _, pa_ = ols(sa.values, [ta.values]); pa = pa_[1]
     rows.append(dict(category=c, total=int(s.sum()), mean_per_day=round(s.mean(), 2),
         pearson_r=r, spearman=rho, p=p, slope_per_F=slope,
         pct_per_10F=slope * 10 / s.mean() * 100, anom_r=ra, anom_p=pa))
@@ -177,7 +202,7 @@ pd.DataFrame(pc_rows).sort_values('total', ascending=False).to_csv('precinct_sta
 q = temp.quantile([1/3, 2/3])
 daygrp = temp.map(lambda t: 'cold' if t < q.iloc[0] else ('hot' if t > q.iloc[1] else 'mild'))
 ndg = daygrp.value_counts()
-incd = inc.copy(); incd['daygrp'] = incd['date'].map(daygrp)
+incd = inc[~inc['ph_time']].copy(); incd['daygrp'] = incd['date'].map(daygrp)
 prof = incd[incd.family == 'Violent'].groupby(['daygrp', 'hour']).size().unstack(0).fillna(0)
 for g in ['cold', 'hot']:
     prof[g + '_perday'] = prof[g] / ndg[g]
@@ -185,7 +210,7 @@ prof[['cold_perday', 'hot_perday']].to_csv('tod_violent_profile.csv')
 
 wh2 = wh.copy(); wh2['tbin'] = pd.cut(wh2['temperature_2m'], TBINS, labels=TLABELS)
 exposure = wh2['tbin'].value_counts().reindex(TLABELS)
-hh = inc.copy(); hh['hourkey'] = hh['ldt'].dt.floor('h')
+hh = inc[~inc['ph_time']].copy(); hh['hourkey'] = hh['ldt'].dt.floor('h')
 hh = hh.merge(wh[['time', 'temperature_2m']], left_on='hourkey', right_on='time', how='left')
 vh = hh[hh.family == 'Violent'].copy()
 vh['tbin'] = pd.cut(vh['temperature_2m'], TBINS, labels=TLABELS)
@@ -247,7 +272,7 @@ def profile(series_daily, hourly_counts):
     bw, pw = ols(s.values, [T, WET]); br, pr = ols(s.values, [T, R, S])
     hr = hourly_counts.reindex(range(24)).fillna(0)
     hshare = (hr / hr.sum() * 100).round(2).tolist()
-    peak_hr = int(hr.drop([0, 12]).idxmax())
+    peak_hr = int(hr.idxmax())   # placeholder midnight/noon stamps already removed
     relrate = (rel / mean).round(3).tolist()
     return dict(total=int(s.sum()), per_day=round(mean, 2), relrate=relrate,
         absrate=rel.round(2).tolist(), monthly=monthly, hourly=hshare,
@@ -261,15 +286,16 @@ def profile(series_daily, hourly_counts):
         wkdy=round(s[s.index.dayofweek < 5].mean(), 2))
 
 items = {}
-items['__ALL__'] = dict(name='All crime', family='All', **profile(dtot, inc.groupby('hour').size()))
+inc_h = inc[~inc['ph_time']]   # hour-of-day shares exclude placeholder stamps
+items['__ALL__'] = dict(name='All crime', family='All', **profile(dtot, inc_h.groupby('hour').size()))
 for f in ['Violent', 'Property', 'Other']:
     items['__' + f.upper() + '__'] = dict(name=f + ' crime (all)', family=f,
-        **profile(dfam[f], inc[inc.family == f].groupby('hour').size()))
+        **profile(dfam[f], inc_h[inc_h.family == f].groupby('hour').size()))
 for c in totals.index:
     if totals[c] < 2000:
         continue
     items[c] = dict(name=c.title(), family=family(c),
-        **profile(dcat[c], inc[inc.cat == c].groupby('hour').size()))
+        **profile(dcat[c], inc_h[inc_h.cat == c].groupby('hour').size()))
 out = dict(meta=dict(n_days=len(temp), d0=str(temp.index.min().date()),
     d1=str(temp.index.max().date()), tbins=TLABELS), items=items)
 json.dump(out, open('profile_data.json', 'w'))

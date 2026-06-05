@@ -28,10 +28,16 @@ plt.rcParams.update(BASE)
 
 
 def ols(y, X):
+    """OLS with Newey-West (HAC) standard errors; see 01_build_datasets.py."""
     X = np.column_stack([np.ones(len(y))] + X)
     beta, *_ = np.linalg.lstsq(X, y, rcond=None)
     resid = y - X @ beta; n, k = X.shape
-    se = np.sqrt(np.diag((resid @ resid) / (n - k) * np.linalg.inv(X.T @ X)))
+    XtX_inv = np.linalg.inv(X.T @ X)
+    u = X * resid[:, None]; L = max(1, int(4 * (n / 100) ** (2 / 9)))
+    S = u.T @ u
+    for lag in range(1, L + 1):
+        G = u[lag:].T @ u[:-lag]; S += (1 - lag / (L + 1)) * (G + G.T)
+    se = np.sqrt(np.diag(XtX_inv @ S @ XtX_inv))
     return beta, 2 * (1 - stats.t.cdf(np.abs(beta / se), n - k))
 
 
