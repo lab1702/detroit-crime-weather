@@ -6,7 +6,7 @@ explorer, and a landing page.
 
 ## Reproduce from scratch
 
-Requires Python 3 with: `pandas`, `numpy`, `scipy`, `matplotlib`, `requests`.
+Requires Python 3 with: `pandas`, `numpy`, `scipy`, `statsmodels`, `matplotlib`, `requests`.
 
 ```bash
 python3 00_fetch_data.py        # download crime CSV (~305 MB) + weather (Open-Meteo)
@@ -47,10 +47,15 @@ step 1.
   period with consistent reporting).
 - Weather is from the **Open-Meteo** historical reanalysis archive for downtown
   Detroit (42.33 N, 83.05 W), temperatures in °F, precipitation in inches.
-- All precipitation, wind and heat-wave effects are reported from OLS regressions
-  that **control for temperature**, so the weather signal is not just the season.
-- Daily crime series are autocorrelated, so all p-values and significance flags use
-  **Newey-West (HAC)** standard errors rather than i.i.d. errors.
+- Daily crime is modelled as a count with a **Poisson regression (log link, PML)**;
+  point estimates are consistent for the conditional mean even under over-dispersion.
+  OLS is kept only for the deseasonalised "anomaly" check, where the series can go
+  negative. All precipitation, wind and heat-wave effects **control for temperature**,
+  so the weather signal is not just the season.
+- Daily crime series are autocorrelated and over-dispersed, so all p-values and
+  significance flags use **Newey-West (HAC)** robust standard errors rather than
+  i.i.d. errors, and families of tests are corrected for multiple comparisons with
+  **Benjamini-Hochberg FDR** q-values.
 - Incidents stamped exactly at midnight or noon are unknown-time placeholders and
   are excluded from hour-of-day analyses (kept in daily counts).
 - Every intermediate file is plain text (CSV / JSON) — no pickle or other
