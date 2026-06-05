@@ -22,10 +22,12 @@ mean and (b) strongly serially correlated (residual lag-1 autocorrelation
   nuisance controls. That one-stage within-season test (temperature plus the
   harmonics in a single count model) is the properly-calibrated alternative to
   deseasonalising ``y`` and a regressor separately and then regressing the two
-  residuals on each other: by Frisch-Waugh-Lovell the temperature coefficient is
-  identical, but folding the seasonal terms into the one fit keeps the HAC
-  standard errors honest instead of treating an estimated seasonal residual as a
-  known regressor.
+  residuals on each other: by the Frisch-Waugh-Lovell intuition the temperature
+  coefficient is recovered from the same within-season variation (FWL is exact
+  for OLS and only approximate for this log-link Poisson PML, so the one- and
+  two-stage point estimates are close but not numerically identical), but folding
+  the seasonal terms into the one fit keeps the HAC standard errors honest instead
+  of treating an estimated seasonal residual as a known regressor.
 
 The Poisson HAC estimator assumes rows are in time order AND contiguous (no date
 gaps): the lag terms treat adjacent rows as one-day-apart neighbours.  For a

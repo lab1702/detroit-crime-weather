@@ -186,9 +186,11 @@ for c in ['total_crimes'] + big:
     # Within-season significance: the SAME Poisson count model with the smooth
     # seasonal cycle entered as harmonic nuisance controls (plus day-of-week), so
     # the temperature effect is identified only from day-to-day departures from
-    # the season. By Frisch-Waugh-Lovell this matches deseasonalizing both series,
-    # but as one stage it carries correctly-calibrated HAC SEs instead of treating
-    # an estimated seasonal residual as a known regressor. ra below stays a
+    # the season. This follows the Frisch-Waugh-Lovell intuition of deseasonalizing
+    # both series (exact for OLS, approximate for this log-link Poisson, so the
+    # estimates are close not identical), but as one stage it carries
+    # correctly-calibrated HAC SEs instead of treating an estimated seasonal
+    # residual as a known regressor. ra below stays a
     # descriptive two-step correlation (for the scatter/headline, not a test).
     sa = climo_anom(s); ta = climo_anom(temp)
     ra, _ = stats.pearsonr(ta, sa)
