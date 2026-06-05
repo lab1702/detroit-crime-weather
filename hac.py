@@ -11,7 +11,11 @@ mean and (b) strongly serially correlated (residual lag-1 autocorrelation
   standard errors that are robust to BOTH the over-dispersion of counts and the
   serial correlation — so we never have to assume the Poisson variance.  A
   +d-unit change in a regressor multiplies the expected count by exp(d*beta);
-  effects are reported as that percentage, ``(exp(d*beta) - 1) * 100``.
+  effects are reported as that percentage, ``(exp(d*beta) - 1) * 100``.  Pass
+  ``dow=`` (weekday 0-6 aligned to ``y``) to add six day-of-week indicators as
+  nuisance controls: Detroit crime has a strong weekly cycle (lag-7 residual
+  autocorrelation ~0.26), so absorbing it sharpens every weather coefficient and
+  removes most of the serial correlation the HAC kernel would otherwise carry.
 
 * ``ols`` — retained only for the deseasonalised "anomaly" check, where the
   series is a continuous day-of-year residual that can go negative and a count
@@ -55,7 +59,17 @@ def ols(y, X):
     return res.params, res.pvalues
 
 
-def poisson_hac(y, X, hac=True):
+def _dow_dummies(dow):
+    """Six day-of-week indicator columns (Monday = 0 is the dropped reference).
+
+    Appended as the LAST regressors so the substantive coefficients keep their
+    positions (``b[1]`` is still the first column of ``X``, etc.).
+    """
+    dow = np.asarray(dow, dtype=int)
+    return np.column_stack([(dow == d).astype(float) for d in range(1, 7)])
+
+
+def poisson_hac(y, X, hac=True, dow=None):
     """Poisson PML (log link) with a robust sandwich covariance.
 
     Parameters
@@ -66,12 +80,21 @@ def poisson_hac(y, X, hac=True):
            contiguous daily series); if False use a White/HC0 sandwich (for
            non-contiguous sub-samples where the autocovariance lags are
            meaningless).
+    dow  : optional array of weekday integers (0=Mon … 6=Sun) aligned to ``y``.
+           When given, six day-of-week indicators are appended as the LAST
+           regressors to soak up Detroit's strong weekly cycle (raw lag-7
+           residual autocorrelation ~0.26). They are nuisance controls: the
+           substantive coefficients keep their positions, so callers index
+           ``b[1]``, ``b[2]`` … exactly as before.
 
     Returns (beta, pvalues) on the log scale.  Convert a coefficient ``b`` to a
     percentage effect with ``(np.exp(step * b) - 1) * 100`` and to an absolute
     incidents-per-day effect at the mean with ``ybar * (np.exp(step * b) - 1)``.
     """
-    Xc = sm.add_constant(np.column_stack(X))
+    cols = list(X)
+    if dow is not None:
+        cols.append(_dow_dummies(dow))
+    Xc = sm.add_constant(np.column_stack(cols))
     if hac:
         cov_kwds = {"cov_type": "HAC", "cov_kwds": {"maxlags": _newey_west_lags(len(y))}}
     else:

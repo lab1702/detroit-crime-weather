@@ -152,7 +152,7 @@ for c in ['total_crimes'] + big:
     s = (daily[c] if c == 'total_crimes' else dcat[c]).reindex(temp.index).fillna(0).astype(float)
     r, _ = stats.pearsonr(temp, s)            # descriptive correlation
     rho, _ = stats.spearmanr(temp, s)
-    b_, p_ = poisson_hac(s.values, [temp.values])   # log-link slope + HAC p-value
+    b_, p_ = poisson_hac(s.values, [temp.values], dow=temp.index.dayofweek)   # log-link slope + HAC p-value, day-of-week controlled
     beta_T, p = b_[1], p_[1]
     slope = s.mean() * (np.exp(beta_T) - 1)         # incidents/°F at the mean (reference)
     pct_per_10F = (np.exp(10 * beta_T) - 1) * 100
@@ -174,12 +174,13 @@ cstat.to_csv('category_stats.csv', index=False)
 Mc = dcat.join(wf, how='inner')
 Tc = Mc['temperature_2m_mean'].values; Rc = Mc['rain_sum'].values
 Sc = Mc['snowfall_sum'].values; Wc = (Mc['precipitation_sum'] >= 0.01).astype(float).values
+DOWc = Mc.index.dayofweek
 prows = []
 for c in cat_cols:
     y = Mc[c].values.astype(float); mean = y.mean()
     if mean < 0.3:
         continue
-    b, p = poisson_hac(y, [Tc, Wc]); b2, p2 = poisson_hac(y, [Tc, Rc, Sc])
+    b, p = poisson_hac(y, [Tc, Wc], dow=DOWc); b2, p2 = poisson_hac(y, [Tc, Rc, Sc], dow=DOWc)
     prows.append(dict(category=c, total=int(y.sum()), mean=mean,
         wet_pct=(np.exp(b[2]) - 1) * 100, wet_p=p[2],
         rain_pct=(np.exp(b2[2]) - 1) * 100, rain_p=p2[2],
@@ -203,7 +204,7 @@ for nb in nb_vol[nb_vol >= 3000].index:
     r, _ = stats.pearsonr(temp, d)
     # Poisson log-link with HAC SEs, matching the rest of the pipeline (the
     # reindexed series is a contiguous daily series, so HAC lags are valid).
-    bc, _ = poisson_hac(d.values, [temp.values])
+    bc, _ = poisson_hac(d.values, [temp.values], dow=temp.index.dayofweek)
     nb_rows.append(dict(neighborhood=nb, total=len(sub), per_day=d.mean(),
         lat=sub.latitude.median(), lon=sub.longitude.median(),
         r=r, pct10=(np.exp(10 * bc[1]) - 1) * 100))
@@ -217,7 +218,7 @@ for pc, sub in geo.groupby('police_precinct'):
     d = sub.groupby('date').size(); d.index = pd.to_datetime(d.index)
     d = d.reindex(temp.index).fillna(0)
     r, _ = stats.pearsonr(temp, d)
-    bc, _ = poisson_hac(d.values, [temp.values])   # Poisson log-link, HAC SEs
+    bc, _ = poisson_hac(d.values, [temp.values], dow=temp.index.dayofweek)   # Poisson log-link, HAC SEs, day-of-week controlled
     pc_rows.append(dict(precinct=pc, total=len(sub), per_day=round(d.mean(), 1),
         pct_violent=round((sub.family == 'Violent').mean() * 100, 1),
         pct10=round((np.exp(10 * bc[1]) - 1) * 100, 1), r=round(r, 2)))
@@ -294,6 +295,7 @@ tbin_s = pd.cut(temp, bins=TBINS, labels=TLABELS)
 wfa = wf.reindex(temp.index)
 T = temp.values; R = wfa['rain_sum'].values; S = wfa['snowfall_sum'].values
 WET = (wfa['precipitation_sum'] >= 0.01).astype(float).values
+DOW = temp.index.dayofweek   # nuisance day-of-week controls, shared by every profile
 
 def profile(series_daily, hourly_counts):
     # Poisson PML (log link, HAC SEs) for every weather effect; significance is
@@ -301,11 +303,11 @@ def profile(series_daily, hourly_counts):
     s = series_daily.reindex(temp.index).fillna(0).astype(float); mean = s.mean()
     rel = s.groupby(tbin_s, observed=True).mean().reindex(TLABELS)
     monthly = s.groupby(s.index.month).mean().reindex(range(1, 13)).round(2).tolist()
-    b, pb = poisson_hac(s.values, [T]); pct10 = (np.exp(10 * b[1]) - 1) * 100
+    b, pb = poisson_hac(s.values, [T], dow=DOW); pct10 = (np.exp(10 * b[1]) - 1) * 100
     r_p, _ = stats.pearsonr(T, s.values)
     sa = climo_anom(s).values; ta = climo_anom(temp).values
     anom_r, _ = stats.pearsonr(ta, sa)
-    bw, pw = poisson_hac(s.values, [T, WET]); br, pr = poisson_hac(s.values, [T, R, S])
+    bw, pw = poisson_hac(s.values, [T, WET], dow=DOW); br, pr = poisson_hac(s.values, [T, R, S], dow=DOW)
     hr = hourly_counts.reindex(range(24)).fillna(0)
     hshare = (hr / hr.sum() * 100).round(2).tolist()
     peak_hr = int(hr.idxmax())   # placeholder midnight/noon stamps already removed

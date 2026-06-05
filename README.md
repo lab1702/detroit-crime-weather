@@ -58,6 +58,13 @@ step 1.
   significance flags use **Newey-West (HAC)** robust standard errors rather than
   i.i.d. errors, and families of tests are corrected for multiple comparisons with
   **Benjamini-Hochberg FDR** q-values.
+- Every count model on the full daily series also carries **day-of-week
+  indicators** as nuisance controls, so Detroit's strong weekly cycle cannot leak
+  into the weather coefficients. Day-of-week is essentially uncorrelated with
+  temperature, so this barely moves the point estimates but tightens the
+  inference. The non-contiguous subsample tests (weekday-vs-weekend and
+  hot-days-only heat waves) omit them — full-week indicators don't apply to a
+  partial-week slice — and fall back to White/HC0 robust errors.
 - Incidents stamped exactly at midnight or noon are unknown-time placeholders and
   are excluded from hour-of-day analyses (kept in daily counts).
 - Every intermediate file is plain text (CSV / JSON) — no pickle or other

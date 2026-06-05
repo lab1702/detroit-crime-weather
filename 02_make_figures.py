@@ -211,10 +211,11 @@ plt.tight_layout(); plt.savefig('figs/fig10_nbmap.png', bbox_inches='tight'); pl
 # ---- FIG 11 : wet-day effect by family (labels inside bars)
 mp = pd.read_csv('daily_precip_merged.csv', parse_dates=[0], index_col=0)
 T = mp['temperature_2m_mean'].values; wet = (mp['precipitation_sum'] >= 0.01).astype(float).values
+DOW = mp.index.dayofweek   # day-of-week nuisance controls, matching step 1
 labels = ['Violent', 'Property', 'Other / admin', 'All crime']; cols = [ACCENT, GREEN, '#9aa3b2', INK]
 pcts, ps = [], []
 for f in ['Violent', 'Property', 'Other', 'total']:
-    y = mp[f].values; b, p = poisson_hac(y, [T, wet]); pcts.append((np.exp(b[2]) - 1) * 100); ps.append(p[2])
+    y = mp[f].values; b, p = poisson_hac(y, [T, wet], dow=DOW); pcts.append((np.exp(b[2]) - 1) * 100); ps.append(p[2])
 fig, ax = plt.subplots(figsize=(9, 5))
 bars = ax.bar(labels, pcts, color=cols, width=0.6, edgecolor='white')
 for bar, v, p in zip(bars, pcts, ps):
@@ -249,7 +250,7 @@ plt.tight_layout(); plt.savefig('figs/fig12_strat.png', bbox_inches='tight'); pl
 R = mp['rain_sum'].values; S = mp['snowfall_sum'].values
 eff = {'rain': [], 'snow': []}; sg = {'rain': [], 'snow': []}
 for f in ['Violent', 'Property']:
-    y = mp[f].values; b, p = poisson_hac(y, [T, R, S]); ym = y.mean()
+    y = mp[f].values; b, p = poisson_hac(y, [T, R, S], dow=DOW); ym = y.mean()
     # log-link coefficient -> incidents/day per +1 inch, evaluated at the mean rate
     eff['rain'].append(ym * (np.exp(b[2]) - 1)); sg['rain'].append(p[2])
     eff['snow'].append(ym * (np.exp(b[3]) - 1)); sg['snow'].append(p[3])
@@ -297,9 +298,10 @@ plt.tight_layout(); plt.savefig('figs/fig14_heatwave.png', bbox_inches='tight');
 
 # ---- FIG 15 : wind (labels inside bars)
 Tm = master['temperature_2m_mean'].values; Pr = master['precipitation_sum'].values; Wd = master['wind_speed_10m_max'].values
+DOWm = master.index.dayofweek   # day-of-week nuisance controls
 eff2, sg2 = [], []
 for f in ['Violent', 'Property']:
-    y = master[f].values; b, p = poisson_hac(y, [Tm, Pr, Wd])
+    y = master[f].values; b, p = poisson_hac(y, [Tm, Pr, Wd], dow=DOWm)
     eff2.append(y.mean() * (np.exp(b[3] * 10) - 1)); sg2.append(p[3])   # incidents/day per +10 mph at the mean
 fig, ax = plt.subplots(figsize=(8.4, 5))
 bars = ax.bar(['Violent crime', 'Property crime'], eff2, color=[ACCENT, GREEN], width=0.5, edgecolor='white')
@@ -316,13 +318,13 @@ plt.tight_layout(); plt.savefig('figs/fig15_wind.png', bbox_inches='tight'); plt
 
 # ---- FIG 16 : unifying  (log-link % effects: (exp(beta)-1)*100)
 y = master['Violent'].values
-heat = (np.exp(poisson_hac(y, [Tm])[0][1] * 10) - 1) * 100
+heat = (np.exp(poisson_hac(y, [Tm], dow=DOWm)[0][1] * 10) - 1) * 100
 wet_ = (master['precipitation_sum'] >= 0.01).astype(float).values
-weteff = (np.exp(poisson_hac(y, [Tm, wet_])[0][2]) - 1) * 100
+weteff = (np.exp(poisson_hac(y, [Tm, wet_], dow=DOWm)[0][2]) - 1) * 100
 wthr = np.quantile(Wd, 0.9); hiwind = (Wd >= wthr).astype(float)
-windeff = (np.exp(poisson_hac(y, [Tm, hiwind])[0][2]) - 1) * 100
+windeff = (np.exp(poisson_hac(y, [Tm, hiwind], dow=DOWm)[0][2]) - 1) * 100
 storm = ((master['precipitation_sum'] > 0.5) | (master['wind_speed_10m_max'] >= wthr)).astype(float).values
-stormeff = (np.exp(poisson_hac(y, [Tm, storm])[0][2]) - 1) * 100
+stormeff = (np.exp(poisson_hac(y, [Tm, storm], dow=DOWm)[0][2]) - 1) * 100
 vals = [heat, weteff, windeff, stormeff]
 fig, ax = plt.subplots(figsize=(9, 5))
 bars = ax.bar(['+10°F\nwarmer', 'Wet\nday', 'Windy\nday', 'Storm\nday'], vals,

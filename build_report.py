@@ -111,13 +111,14 @@ for _,r in pc.iterrows():
 pm=pd.read_csv('daily_precip_merged.csv',parse_dates=[0],index_col=0)
 _T=pm['temperature_2m_mean'].values
 _wet=(pm['precipitation_sum']>=0.01).astype(float).values
+_DOWp=pm.index.dayofweek   # day-of-week nuisance controls, matching step 1
 wet_eff={}
 for f in ['total','Violent','Property','Other']:
-    y=pm[f].values; b,p=poisson_hac(y,[_T,_wet]); wet_eff[f]=((np.exp(b[2])-1)*100,p[2])
+    y=pm[f].values; b,p=poisson_hac(y,[_T,_wet],dow=_DOWp); wet_eff[f]=((np.exp(b[2])-1)*100,p[2])
 _rain=pm['rain_sum'].values; _snow=pm['snowfall_sum'].values
 rs={}
 for f in ['Violent','Property']:
-    y=pm[f].values; b,p=poisson_hac(y,[_T,_rain,_snow]); ym=y.mean()
+    y=pm[f].values; b,p=poisson_hac(y,[_T,_rain,_snow],dow=_DOWp); ym=y.mean()
     # log-link coefficients -> incidents/day per inch at the mean rate
     rs[f]=dict(rain=ym*(np.exp(b[2])-1),rp=p[2],snow=ym*(np.exp(b[3])-1),sp=p[3])
 n_wet=int(_wet.sum()); n_dry=int((1-_wet).sum()); n_snow=int((pm['snowfall_sum']>0).sum())
@@ -131,24 +132,25 @@ for name,r in cond.iterrows():
 # --- wind/storm/heatwave/unify (sections 09 & 10) ---
 MM=pd.read_csv('daily_master.csv',parse_dates=[0],index_col=0)
 _Tm=MM['temperature_2m_mean'].values; _Prc=MM['precipitation_sum'].values; _Wd=MM['wind_speed_10m_max'].values
+_DOWm=MM.index.dayofweek   # day-of-week nuisance controls
 # wind per +10mph
 # wind per +10mph -> incidents/day at the mean rate
 _vm=MM['Violent'].mean(); _pmn=MM['Property'].mean()
-wind_v=poisson_hac(MM['Violent'].values,[_Tm,_Prc,_Wd]); wind_v_eff=_vm*(np.exp(wind_v[0][3]*10)-1); wind_v_p=wind_v[1][3]
-wind_p=poisson_hac(MM['Property'].values,[_Tm,_Prc,_Wd]); wind_p_eff=_pmn*(np.exp(wind_p[0][3]*10)-1); wind_p_p=wind_p[1][3]
+wind_v=poisson_hac(MM['Violent'].values,[_Tm,_Prc,_Wd],dow=_DOWm); wind_v_eff=_vm*(np.exp(wind_v[0][3]*10)-1); wind_v_p=wind_v[1][3]
+wind_p=poisson_hac(MM['Property'].values,[_Tm,_Prc,_Wd],dow=_DOWm); wind_p_eff=_pmn*(np.exp(wind_p[0][3]*10)-1); wind_p_p=wind_p[1][3]
 # storm
 _wthr=np.quantile(_Wd,0.9)
 _storm=((MM['precipitation_sum']>0.5)|(MM['wind_speed_10m_max']>=_wthr)).astype(float).values
 n_storm=int(_storm.sum())
-sv=poisson_hac(MM['Violent'].values,[_Tm,_storm]); storm_v=(np.exp(sv[0][2])-1)*100
+sv=poisson_hac(MM['Violent'].values,[_Tm,_storm],dow=_DOWm); storm_v=(np.exp(sv[0][2])-1)*100
 # unify (violent) — log-link % effects
 yv=MM['Violent'].values
-u_heat=(np.exp(poisson_hac(yv,[_Tm])[0][1]*10)-1)*100
+u_heat=(np.exp(poisson_hac(yv,[_Tm],dow=_DOWm)[0][1]*10)-1)*100
 _wet=(MM['precipitation_sum']>=0.01).astype(float).values
-u_wet=(np.exp(poisson_hac(yv,[_Tm,_wet])[0][2])-1)*100
+u_wet=(np.exp(poisson_hac(yv,[_Tm,_wet],dow=_DOWm)[0][2])-1)*100
 _hiwind=(_Wd>=_wthr).astype(float)
-u_wind=(np.exp(poisson_hac(yv,[_Tm,_hiwind])[0][2])-1)*100
-u_storm=(np.exp(poisson_hac(yv,[_Tm,_storm])[0][2])-1)*100
+u_wind=(np.exp(poisson_hac(yv,[_Tm,_hiwind],dow=_DOWm)[0][2])-1)*100
+u_storm=(np.exp(poisson_hac(yv,[_Tm,_storm],dow=_DOWm)[0][2])-1)*100
 # heat waves
 _tmax=MM['temperature_2m_max']; _hot=(_tmax>=85).astype(int); _grp=(_hot.diff()!=0).cumsum()
 _pos=np.zeros(len(MM),int)
@@ -375,7 +377,7 @@ a{{color:var(--cool)}}
 <ul>
 <li><b>Crime data.</b> Detroit Police Department incident records via the <a href="https://data.detroitmi.gov/">Detroit Open Data Portal</a> (RMS export). Analysis restricted to {d0}&ndash;{d1}, the window with consistent reporting (2017 onward); sparse legacy records back to 1915 were excluded. Each incident's UTC timestamp was converted to America/Detroit local time before assigning it to a calendar day.</li>
 <li><b>Weather data.</b> Daily mean/max/min 2&nbsp;m air temperature for downtown Detroit (42.33&deg;N, 83.05&deg;W) from the Open-Meteo historical reanalysis archive, in &deg;F. Daily mean temperature is used throughout.</li>
-<li><b>Method.</b> Incidents were aggregated to daily counts overall and per offense category, then joined to weather by date. Each weather effect is fit with a <b>Poisson pseudo-maximum-likelihood</b> model (log link): the coefficients are consistent for the conditional mean even though daily crime is over-dispersed, and a +10&deg;F change is reported as the multiplicative effect <b>(e<sup>10&beta;</sup>&minus;1)&times;100&percnt;</b> (absolute per-day effects are evaluated at the series mean). Pearson and Spearman correlations are also reported as descriptive measures, alongside a deseasonalized check that regresses crime anomalies on temperature anomalies, where each series' smooth seasonal cycle (a low-order harmonic fit on the day-of-year, leap-year safe) has been removed first (kept linear, since anomalies can be negative). Standard errors are robust by construction: because counts are both over-dispersed and serially correlated (residual lag-1 autocorrelation &asymp;&nbsp;0.3), every p-value uses a <b>Newey-West (HAC)</b> sandwich on the Poisson score — a Bartlett kernel with the automatic rule-of-thumb bandwidth (lag&nbsp;=&nbsp;4&middot;(n/100)<sup>2/9</sup>) — which is valid under both, where i.i.d. errors would overstate significance by roughly 2&ndash;3&times; (the standard error for the total-crime series roughly triples from nonrobust to HAC). Across the per-offense tables, significance flags are <b>Benjamini-Hochberg FDR-corrected</b> within each family of category-level tests (temperature, wet, rain, snow), so an isolated "significant" category among two dozen is not mistaken for a real effect; the headline all-crime row and the four family aggregates are primary hypotheses and keep their raw p-values.</li>
+<li><b>Method.</b> Incidents were aggregated to daily counts overall and per offense category, then joined to weather by date. Each weather effect is fit with a <b>Poisson pseudo-maximum-likelihood</b> model (log link): the coefficients are consistent for the conditional mean even though daily crime is over-dispersed, and a +10&deg;F change is reported as the multiplicative effect <b>(e<sup>10&beta;</sup>&minus;1)&times;100&percnt;</b> (absolute per-day effects are evaluated at the series mean). Pearson and Spearman correlations are also reported as descriptive measures, alongside a deseasonalized check that regresses crime anomalies on temperature anomalies, where each series' smooth seasonal cycle (a low-order harmonic fit on the day-of-year, leap-year safe) has been removed first (kept linear, since anomalies can be negative). Standard errors are robust by construction: because counts are both over-dispersed and serially correlated (residual lag-1 autocorrelation &asymp;&nbsp;0.3), every p-value uses a <b>Newey-West (HAC)</b> sandwich on the Poisson score — a Bartlett kernel with the automatic rule-of-thumb bandwidth (lag&nbsp;=&nbsp;4&middot;(n/100)<sup>2/9</sup>) — which is valid under both, where i.i.d. errors would overstate significance by roughly 2&ndash;3&times; (the standard error for the total-crime series roughly triples from nonrobust to HAC). Every count model on the full daily series also includes <b>day-of-week indicators</b> as nuisance controls, soaking up Detroit's strong weekly cycle so it cannot leak into the weather coefficients; because day-of-week is essentially uncorrelated with temperature the point estimates barely move, but the inference is cleaner (the subsample tests on non-contiguous slices &mdash; weekday/weekend and hot-days-only &mdash; omit them, as full-week indicators do not apply there). Across the per-offense tables, significance flags are <b>Benjamini-Hochberg FDR-corrected</b> within each family of category-level tests (temperature, wet, rain, snow), so an isolated "significant" category among two dozen is not mistaken for a real effect; the headline all-crime row and the four family aggregates are primary hypotheses and keep their raw p-values.</li>
 <li><b>Time of day.</b> The hourly analysis joins each incident to Open-Meteo's hourly 2&nbsp;m temperature for the matching local clock-hour. "Hot" and "cold" days are the warmest and coldest thirds of days by daily mean temperature. "Violent" is a broad violent/interpersonal grouping: assault, aggravated assault, weapons, robbery, homicide, sexual/sex offenses, arson, disorderly conduct, and obstructing police &mdash; note this reaches beyond the strict UCR violent definition to include arson and the confrontational public-order offenses (disorderly conduct, obstructing police), which together are only ~4&percnt; of the group and do not drive its results. "Property" groups larceny, damage, stolen vehicle, burglary, and stolen property. Records whose timestamp falls exactly on midnight (00:00:00) or noon (12:00:00) are unknown-time placeholders &mdash; together ~5% of incidents, far above chance &mdash; and are excluded from all hour-of-day analyses (but retained in daily counts, where the calendar day is still valid).</li>
 <li><b>Geography.</b> Incidents are geocoded to the nearest street intersection (visible as faint gridding in the density map). Neighborhood sensitivity is computed only for neighborhoods with &ge;3,000 incidents; precinct figures cover all 11 precincts. Bubble positions are median incident coordinates, not official boundaries.</li>
 <li><b>Precipitation.</b> Daily precipitation, rain, and snowfall totals (inches) and WMO weather codes come from the same Open-Meteo archive. Because precipitation co-varies with temperature, all precipitation effects come from the same Poisson model with daily mean temperature included as a control (and, for the rain-vs-snow split, rain and snowfall amounts entered separately); the by-condition table is raw and is labelled as temperature-confounded. A "wet day" is &ge;0.01&nbsp;in of precipitation.</li>
