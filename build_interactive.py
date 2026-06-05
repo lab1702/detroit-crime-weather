@@ -97,7 +97,7 @@ footer{text-align:center;color:var(--sub);font-size:13px;margin-top:30px}
 <p class="note">Note: midnight and noon are inflated by reports filed with an unknown exact time; the "busiest hour" stat above ignores both.</p></div>
 </div>
 </div>
-<footer>Detroit Open Data Portal &amp; Open-Meteo · Temperature-controlled effects via OLS regression · Companion to the full Detroit crime &amp; temperature report</footer>
+<footer>Detroit Open Data Portal &amp; Open-Meteo · Temperature-controlled effects via Poisson regression (log link, HAC-robust) · Companion to the full Detroit crime &amp; temperature report</footer>
 <script>
 const DATA = __DATA__;
 const ITEMS = DATA.items, TB = DATA.meta.tbins;

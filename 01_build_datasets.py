@@ -31,10 +31,12 @@ def family(c):
     return 'Violent' if c in VIOL else ('Property' if c in PROP else 'Other')
 
 
-# OLS with Newey-West (HAC) standard errors lives in hac.py and is shared by the
-# figure and report scripts; daily crime counts are serially correlated, so i.i.d.
-# errors would overstate significance by ~2-3x (the SE roughly triples from
-# nonrobust to HAC for the total-crime series).
+# The primary estimator is Poisson PML (log link) with Newey-West (HAC) standard
+# errors; it lives in hac.py and is shared by the figure and report scripts. OLS
+# (also HAC) is kept only for the deseasonalised anomaly check, where the series
+# can go negative. Daily crime counts are serially correlated and over-dispersed,
+# so i.i.d. errors would overstate significance by ~2-3x (the SE roughly triples
+# from nonrobust to HAC for the total-crime series).
 
 
 # ----------------------------------------------------------- incident-level frame

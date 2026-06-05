@@ -25,10 +25,15 @@ Both HAC estimators assume rows are in time order AND contiguous (no date
 gaps): the lag terms treat adjacent rows as one-day-apart neighbours.  For a
 filtered / non-contiguous frame (e.g. hot-days-only sub-samples) pass
 ``hac=False`` to ``poisson_hac`` to fall back to White (heteroskedasticity-only)
-errors, which drop the meaningless cross-day autocovariances.  We use the
-``HC3`` variant rather than ``HC0`` there: HC3 carries a leverage correction
-that keeps it well-calibrated on the small sub-samples (e.g. hot-days-only,
-~100 rows) where the uncorrected HC0 sandwich understates the standard errors.
+errors, which drop the cross-day autocovariances that a fixed daily-lag kernel
+can no longer interpret on an irregular index.  This also drops the genuine
+serial correlation that still survives between the few adjacent retained days
+(e.g. consecutive hot days), so the White SEs can be mildly anti-conservative —
+an accepted cost of not imposing a one-day-lag structure where the rows are not
+one day apart.  We use the ``HC3`` variant rather than ``HC0``: HC3 carries a
+leverage correction that keeps it well-calibrated on the small sub-samples (e.g.
+hot-days-only, ~100 rows) where the uncorrected HC0 sandwich understates the
+standard errors.
 
 ``bh`` returns Benjamini-Hochberg FDR-adjusted q-values for a family of tests.
 
@@ -100,7 +105,8 @@ def poisson_hac(y, X, hac=True, dow=None):
         cols.append(_dow_dummies(dow))
     Xc = sm.add_constant(np.column_stack(cols))
     if hac:
-        cov_kwds = {"cov_type": "HAC", "cov_kwds": {"maxlags": _newey_west_lags(len(y))}}
+        cov_kwds = {"cov_type": "HAC", "cov_kwds": {"maxlags": _newey_west_lags(len(y)),
+                                                    "use_correction": False}}
     else:
         cov_kwds = {"cov_type": "HC3"}
     res = sm.GLM(np.asarray(y, dtype=float), Xc, family=sm.families.Poisson()).fit(**cov_kwds)
