@@ -15,6 +15,7 @@ import json
 import numpy as np
 import pandas as pd
 from scipy import stats
+from hac import ols, poisson_hac, bh
 
 WIN_START, WIN_END = "2017-01-01", "2026-06-04"   # [start, end) local time
 VIOL = {'AGGRAVATED ASSAULT', 'ASSAULT', 'WEAPONS OFFENSES', 'ROBBERY', 'HOMICIDE',
@@ -30,31 +31,9 @@ def family(c):
     return 'Violent' if c in VIOL else ('Property' if c in PROP else 'Other')
 
 
-def ols(y, X, want_p=True):
-    """OLS with intercept and Newey-West (HAC) standard errors.
-
-    Daily crime series are strongly serially correlated (residual lag-1 auto-
-    correlation ~0.3), so i.i.d. OLS standard errors understate uncertainty by
-    ~2x and overstate significance. We use a Bartlett-kernel HAC estimator with
-    the Newey-West (1994) plug-in bandwidth. Rows must be in time order (they
-    are: every frame here is indexed by a contiguous daily date range).
-    Returns (beta, pvalues).
-    """
-    X = np.column_stack([np.ones(len(y))] + X)
-    beta, *_ = np.linalg.lstsq(X, y, rcond=None)
-    resid = y - X @ beta
-    n, k = X.shape
-    XtX_inv = np.linalg.inv(X.T @ X)
-    u = X * resid[:, None]                      # n x k score contributions
-    L = max(1, int(4 * (n / 100) ** (2 / 9)))   # Newey-West plug-in lag
-    S = u.T @ u
-    for lag in range(1, L + 1):
-        w = 1 - lag / (L + 1)                    # Bartlett weight
-        G = u[lag:].T @ u[:-lag]
-        S += w * (G + G.T)
-    se = np.sqrt(np.diag(XtX_inv @ S @ XtX_inv))
-    p = 2 * (1 - stats.t.cdf(np.abs(beta / se), n - k))
-    return beta, p
+# OLS with Newey-West (HAC) standard errors lives in hac.py and is shared by the
+# figure and report scripts; daily crime counts are serially correlated, so i.i.d.
+# errors would overstate significance by ~2x.
 
 
 # ----------------------------------------------------------- incident-level frame
@@ -84,10 +63,36 @@ inc['ph_time'] = (dt.dt.hour.isin([0, 12]) & (dt.dt.minute == 0) & (dt.dt.second
 print(f"  {len(inc):,} incidents  ({inc['ph_time'].sum():,} placeholder-time, "
       f"excluded from hour-of-day analysis only)")
 
+# Drop not-yet-complete trailing days. The most recent dates are often only
+# partially entered (e.g. the final day can show a couple of incidents against a
+# ~230/day norm), which would otherwise enter every daily regression as a
+# spurious near-zero point and depress recent-day counts to zero after the
+# reindex(...).fillna(0) used downstream. Walk back from the end and trim any
+# trailing day under half the preceding 4-week median, stopping at the first
+# full day so genuine low-count interior days are left untouched.
+_dt_tot = inc.groupby('date').size().sort_index()
+_ref = _dt_tot.iloc[-29:-1].median()
+_cut = _dt_tot.index.max()
+for _d in reversed(_dt_tot.index):
+    if _dt_tot[_d] < 0.5 * _ref:
+        _cut = _d - pd.Timedelta(days=1)
+    else:
+        break
+_n_drop = int((_dt_tot.index > _cut).sum())
+if _n_drop:
+    print(f"  dropping {_n_drop} incomplete trailing day(s) after {_cut.date()} "
+          f"({int(_dt_tot[_dt_tot.index > _cut].sum())} incidents)")
+    inc = inc[inc['date'] <= _cut].copy()
+
 # ------------------------------------------------------------------ weather load
 wd = pd.read_csv('detroit_weather.csv', parse_dates=['time']).set_index('time')
 wf = pd.read_csv('detroit_weather_full.csv', parse_dates=['time']).set_index('time')
 wh = pd.read_csv('detroit_weather_hourly.csv', parse_dates=['time'])
+# Keep weather aligned to the same complete-day window as the incidents, so the
+# reindex(temp.index) aggregates below never resurrect a trimmed incomplete day.
+wd = wd.loc[wd.index <= _cut]
+wf = wf.loc[wf.index <= _cut]
+wh = wh[wh['time'].dt.normalize() <= _cut]
 temp = wd['temperature_2m_mean']
 doy = temp.index.dayofyear
 
@@ -137,21 +142,33 @@ heat_norm = heat / m[top12].mean()
 heat_norm.T.to_csv('heat_norm.csv')
 
 # ------------------------------------------------------ category_stats.csv (temp)
+# Primary model: Poisson PML (log link) with HAC-robust SEs. The temperature
+# effect is the multiplicative change per +10°F, (exp(10·beta)-1)·100 %. The
+# deseasonalised anomaly check stays linear (anomalies can be negative). p-values
+# across the per-category set are FDR-corrected below (Benjamini-Hochberg).
 big = totals[totals >= 2000].index.tolist()
 rows = []
 for c in ['total_crimes'] + big:
     s = (daily[c] if c == 'total_crimes' else dcat[c]).reindex(temp.index).fillna(0).astype(float)
     r, _ = stats.pearsonr(temp, s)            # descriptive correlation
     rho, _ = stats.spearmanr(temp, s)
-    b_, p_ = ols(s.values, [temp.values])     # slope + HAC p-value
-    slope, p = b_[1], p_[1]
+    b_, p_ = poisson_hac(s.values, [temp.values])   # log-link slope + HAC p-value
+    beta_T, p = b_[1], p_[1]
+    slope = s.mean() * (np.exp(beta_T) - 1)         # incidents/°F at the mean (reference)
+    pct_per_10F = (np.exp(10 * beta_T) - 1) * 100
     sa = climo_anom(s); ta = climo_anom(temp)
     ra, _ = stats.pearsonr(ta, sa)
     _, pa_ = ols(sa.values, [ta.values]); pa = pa_[1]
     rows.append(dict(category=c, total=int(s.sum()), mean_per_day=round(s.mean(), 2),
         pearson_r=r, spearman=rho, p=p, slope_per_F=slope,
-        pct_per_10F=slope * 10 / s.mean() * 100, anom_r=ra, anom_p=pa))
-pd.DataFrame(rows).to_csv('category_stats.csv', index=False)
+        pct_per_10F=pct_per_10F, anom_r=ra, anom_p=pa))
+cstat = pd.DataFrame(rows)
+# Benjamini-Hochberg FDR across the per-category temperature tests (the headline
+# total_crimes row is a single primary hypothesis and keeps its raw p-value).
+_catmask = cstat['category'] != 'total_crimes'
+cstat['p_fdr'] = cstat['p']
+cstat.loc[_catmask, 'p_fdr'] = bh(cstat.loc[_catmask, 'p'].values)
+cstat.to_csv('category_stats.csv', index=False)
 
 # ----------------------------------------------- category_precip.csv (temp-controlled)
 Mc = dcat.join(wf, how='inner')
@@ -162,12 +179,16 @@ for c in cat_cols:
     y = Mc[c].values.astype(float); mean = y.mean()
     if mean < 0.3:
         continue
-    b, p = ols(y, [Tc, Wc]); b2, p2 = ols(y, [Tc, Rc, Sc])
+    b, p = poisson_hac(y, [Tc, Wc]); b2, p2 = poisson_hac(y, [Tc, Rc, Sc])
     prows.append(dict(category=c, total=int(y.sum()), mean=mean,
-        wet_pct=b[2] / mean * 100, wet_p=p[2],
-        rain_pct=b2[2] / mean * 100, rain_p=p2[2],
-        snow_pct=b2[3] / mean * 100, snow_p=p2[3]))
-pd.DataFrame(prows).sort_values('wet_pct').to_csv('category_precip.csv', index=False)
+        wet_pct=(np.exp(b[2]) - 1) * 100, wet_p=p[2],
+        rain_pct=(np.exp(b2[2]) - 1) * 100, rain_p=p2[2],
+        snow_pct=(np.exp(b2[3]) - 1) * 100, snow_p=p2[3]))
+cprecip = pd.DataFrame(prows)
+# FDR-correct each precipitation test type across categories (Benjamini-Hochberg).
+for _col in ['wet', 'rain', 'snow']:
+    cprecip[_col + '_q'] = bh(cprecip[_col + '_p'].values)
+cprecip.sort_values('wet_pct').to_csv('category_precip.csv', index=False)
 
 # --------------------------------------------------------------- geography
 geo = inc[inc['latitude'].between(42.20, 42.50) & inc['longitude'].between(-83.30, -82.85)]
@@ -262,14 +283,16 @@ T = temp.values; R = wf['rain_sum'].values; S = wf['snowfall_sum'].values
 WET = (wf['precipitation_sum'] >= 0.01).astype(float).values
 
 def profile(series_daily, hourly_counts):
+    # Poisson PML (log link, HAC SEs) for every weather effect; significance is
+    # FDR-corrected across the per-category set after all profiles are built.
     s = series_daily.reindex(temp.index).fillna(0).astype(float); mean = s.mean()
     rel = s.groupby(tbin_s, observed=True).mean().reindex(TLABELS)
     monthly = s.groupby(s.index.month).mean().reindex(range(1, 13)).round(2).tolist()
-    b, _ = ols(s.values, [T]); pct10 = b[1] * 10 / mean * 100
+    b, pb = poisson_hac(s.values, [T]); pct10 = (np.exp(10 * b[1]) - 1) * 100
     r_p, _ = stats.pearsonr(T, s.values)
     sa = climo_anom(s).values; ta = climo_anom(temp).values
     anom_r, _ = stats.pearsonr(ta, sa)
-    bw, pw = ols(s.values, [T, WET]); br, pr = ols(s.values, [T, R, S])
+    bw, pw = poisson_hac(s.values, [T, WET]); br, pr = poisson_hac(s.values, [T, R, S])
     hr = hourly_counts.reindex(range(24)).fillna(0)
     hshare = (hr / hr.sum() * 100).round(2).tolist()
     peak_hr = int(hr.idxmax())   # placeholder midnight/noon stamps already removed
@@ -277,13 +300,15 @@ def profile(series_daily, hourly_counts):
     return dict(total=int(s.sum()), per_day=round(mean, 2), relrate=relrate,
         absrate=rel.round(2).tolist(), monthly=monthly, hourly=hshare,
         pct10=round(pct10, 1), r=round(r_p, 2), anom_r=round(anom_r, 2),
-        wet_pct=round(bw[2] / mean * 100, 1), wet_sig=bool(pw[2] < 0.05),
-        rain_pct=round(br[2] / mean * 100, 1), rain_sig=bool(pr[2] < 0.05),
-        snow_pct=round(br[3] / mean * 100, 1), snow_sig=bool(pr[3] < 0.05),
+        wet_pct=round((np.exp(bw[2]) - 1) * 100, 1), wet_sig=bool(pw[2] < 0.05),
+        rain_pct=round((np.exp(br[2]) - 1) * 100, 1), rain_sig=bool(pr[2] < 0.05),
+        snow_pct=round((np.exp(br[3]) - 1) * 100, 1), snow_sig=bool(pr[3] < 0.05),
         peak_hr=peak_hr, peak_month=int(np.argmax(monthly)) + 1,
         hot_cold=round(relrate[-1] / relrate[0], 2) if relrate[0] else None,
         wknd=round(s[s.index.dayofweek >= 5].mean(), 2),
-        wkdy=round(s[s.index.dayofweek < 5].mean(), 2))
+        wkdy=round(s[s.index.dayofweek < 5].mean(), 2),
+        # raw p-values retained for FDR correction; stripped before serialising
+        _wet_p=float(pw[2]), _rain_p=float(pr[2]), _snow_p=float(pr[3]))
 
 items = {}
 inc_h = inc[~inc['ph_time']]   # hour-of-day shares exclude placeholder stamps
@@ -291,11 +316,25 @@ items['__ALL__'] = dict(name='All crime', family='All', **profile(dtot, inc_h.gr
 for f in ['Violent', 'Property', 'Other']:
     items['__' + f.upper() + '__'] = dict(name=f + ' crime (all)', family=f,
         **profile(dfam[f], inc_h[inc_h.family == f].groupby('hour').size()))
+cat_keys = []
 for c in totals.index:
     if totals[c] < 2000:
         continue
     items[c] = dict(name=c.title(), family=family(c),
         **profile(dcat[c], inc_h[inc_h.cat == c].groupby('hour').size()))
+    cat_keys.append(c)
+
+# FDR-correct the per-category precipitation significance flags (the explorer
+# shows one row per offense; the four family aggregates above are primary
+# hypotheses and keep their raw flags). Then strip the working p-values.
+for eff in ['wet', 'rain', 'snow']:
+    q = bh(np.array([items[c]['_' + eff + '_p'] for c in cat_keys]))
+    for c, qc in zip(cat_keys, q):
+        items[c][eff + '_sig'] = bool(qc < 0.05)
+for it in items.values():
+    for kk in ('_wet_p', '_rain_p', '_snow_p'):
+        it.pop(kk, None)
+
 out = dict(meta=dict(n_days=len(temp), d0=str(temp.index.min().date()),
     d1=str(temp.index.max().date()), tbins=TLABELS), items=items)
 json.dump(out, open('profile_data.json', 'w'))

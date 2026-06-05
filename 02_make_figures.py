@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mc
 from matplotlib.patches import Patch
 from scipy import stats
+from hac import poisson_hac
 
 os.makedirs('figs', exist_ok=True)
 INK = '#1a1d29'; SUB = '#5b6577'; GRID = '#e6e9ef'; CARD = '#ffffff'
@@ -25,20 +26,6 @@ BASE = {
  'axes.spines.top': False, 'axes.spines.right': False,
  'xtick.bottom': False, 'ytick.left': False, 'figure.dpi': 130}
 plt.rcParams.update(BASE)
-
-
-def ols(y, X):
-    """OLS with Newey-West (HAC) standard errors; see 01_build_datasets.py."""
-    X = np.column_stack([np.ones(len(y))] + X)
-    beta, *_ = np.linalg.lstsq(X, y, rcond=None)
-    resid = y - X @ beta; n, k = X.shape
-    XtX_inv = np.linalg.inv(X.T @ X)
-    u = X * resid[:, None]; L = max(1, int(4 * (n / 100) ** (2 / 9)))
-    S = u.T @ u
-    for lag in range(1, L + 1):
-        G = u[lag:].T @ u[:-lag]; S += (1 - lag / (L + 1)) * (G + G.T)
-    se = np.sqrt(np.diag(XtX_inv @ S @ XtX_inv))
-    return beta, 2 * (1 - stats.t.cdf(np.abs(beta / se), n - k))
 
 
 def tcol(t):
@@ -89,7 +76,7 @@ def fam_color(c):
             'SEX OFFENSES','SEXUAL ASSAULT','ARSON','DISORDERLY CONDUCT','OBSTRUCTING THE POLICE'}
     prop = {'DAMAGE TO PROPERTY','LARCENY','STOLEN VEHICLE','BURGLARY','STOLEN PROPERTY'}
     return ACCENT if c in viol else ('#3a7d44' if c in prop else '#9aa3b2')
-sig = cs['p'] < 0.05
+sig = cs['p_fdr'] < 0.05
 colors = [mc.to_rgba(fam_color(c), 1 if s else 0.32) for c, s in zip(cs.category, sig)]
 fig, ax = plt.subplots(figsize=(9.5, 8))
 ax.barh(cs.category, cs.pct_per_10F, color=colors, edgecolor='white')
@@ -98,7 +85,7 @@ for y, (v, s) in enumerate(zip(cs.pct_per_10F, sig)):
             fontsize=9, color=INK if s else SUB)
 ax.set_xlabel('Change in daily incidents per +10°F  (% of category average)')
 ax.set_title('Which crimes are most temperature-sensitive?', fontsize=15, fontweight='bold', pad=12)
-ax.axvline(0, color=SUB, lw=1); ax.set_xlim(min(0, cs.pct_per_10F.min() - 0.8), 10.5)
+ax.axvline(0, color=SUB, lw=1); ax.set_xlim(min(0, cs.pct_per_10F.min() - 0.8), 11.5)
 ax.legend(handles=[Patch(color=ACCENT, label='Violent / interpersonal'),
     Patch(color='#3a7d44', label='Property'), Patch(color='#9aa3b2', label='Other / administrative')],
     loc='lower right', frameon=False, fontsize=10)
@@ -229,7 +216,7 @@ T = mp['temperature_2m_mean'].values; wet = (mp['precipitation_sum'] >= 0.01).as
 labels = ['Violent', 'Property', 'Other / admin', 'All crime']; cols = [ACCENT, GREEN, '#9aa3b2', INK]
 pcts, ps = [], []
 for f in ['Violent', 'Property', 'Other', 'total']:
-    y = mp[f].values; b, p = ols(y, [T, wet]); pcts.append(b[2] / y.mean() * 100); ps.append(p[2])
+    y = mp[f].values; b, p = poisson_hac(y, [T, wet]); pcts.append((np.exp(b[2]) - 1) * 100); ps.append(p[2])
 fig, ax = plt.subplots(figsize=(9, 5))
 bars = ax.bar(labels, pcts, color=cols, width=0.6, edgecolor='white')
 for bar, v, p in zip(bars, pcts, ps):
@@ -264,8 +251,10 @@ plt.tight_layout(); plt.savefig('figs/fig12_strat.png', bbox_inches='tight'); pl
 R = mp['rain_sum'].values; S = mp['snowfall_sum'].values
 eff = {'rain': [], 'snow': []}; sg = {'rain': [], 'snow': []}
 for f in ['Violent', 'Property']:
-    y = mp[f].values; b, p = ols(y, [T, R, S])
-    eff['rain'].append(b[2]); sg['rain'].append(p[2]); eff['snow'].append(b[3]); sg['snow'].append(p[3])
+    y = mp[f].values; b, p = poisson_hac(y, [T, R, S]); ym = y.mean()
+    # log-link coefficient -> incidents/day per +1 inch, evaluated at the mean rate
+    eff['rain'].append(ym * (np.exp(b[2]) - 1)); sg['rain'].append(p[2])
+    eff['snow'].append(ym * (np.exp(b[3]) - 1)); sg['snow'].append(p[3])
 x = np.arange(2); w = 0.38
 fig, ax = plt.subplots(figsize=(9, 5))
 b1 = ax.bar(x - w/2, eff['rain'], w, color=RAIN, label='Per +1 in. rain', edgecolor='white')
@@ -312,7 +301,8 @@ plt.tight_layout(); plt.savefig('figs/fig14_heatwave.png', bbox_inches='tight');
 Tm = master['temperature_2m_mean'].values; Pr = master['precipitation_sum'].values; Wd = master['wind_speed_10m_max'].values
 eff2, sg2 = [], []
 for f in ['Violent', 'Property']:
-    y = master[f].values; b, p = ols(y, [Tm, Pr, Wd]); eff2.append(b[3] * 10); sg2.append(p[3])
+    y = master[f].values; b, p = poisson_hac(y, [Tm, Pr, Wd])
+    eff2.append(y.mean() * (np.exp(b[3] * 10) - 1)); sg2.append(p[3])   # incidents/day per +10 mph at the mean
 fig, ax = plt.subplots(figsize=(8.4, 5))
 bars = ax.bar(['Violent crime', 'Property crime'], eff2, color=[ACCENT, GREEN], width=0.5, edgecolor='white')
 for b, v, p in zip(bars, eff2, sg2):
@@ -326,15 +316,15 @@ ax.set_ylabel('Change in incidents/day per +10 mph wind\n(holding temperature & 
 ax.set_title('Windy days quiet violence — but not theft', fontsize=15, fontweight='bold', pad=12); ax.set_ylim(-3.4, 0.7)
 plt.tight_layout(); plt.savefig('figs/fig15_wind.png', bbox_inches='tight'); plt.close()
 
-# ---- FIG 16 : unifying
-y = master['Violent'].values; vm = y.mean()
-heat = ols(y, [Tm])[0][1] * 10 / vm * 100
+# ---- FIG 16 : unifying  (log-link % effects: (exp(beta)-1)*100)
+y = master['Violent'].values
+heat = (np.exp(poisson_hac(y, [Tm])[0][1] * 10) - 1) * 100
 wet_ = (master['precipitation_sum'] >= 0.01).astype(float).values
-weteff = ols(y, [Tm, wet_])[0][2] / vm * 100
+weteff = (np.exp(poisson_hac(y, [Tm, wet_])[0][2]) - 1) * 100
 wthr = np.quantile(Wd, 0.9); hiwind = (Wd >= wthr).astype(float)
-windeff = ols(y, [Tm, hiwind])[0][2] / vm * 100
+windeff = (np.exp(poisson_hac(y, [Tm, hiwind])[0][2]) - 1) * 100
 storm = ((master['precipitation_sum'] > 0.5) | (master['wind_speed_10m_max'] >= wthr)).astype(float).values
-stormeff = ols(y, [Tm, storm])[0][2] / vm * 100
+stormeff = (np.exp(poisson_hac(y, [Tm, storm])[0][2]) - 1) * 100
 vals = [heat, weteff, windeff, stormeff]
 fig, ax = plt.subplots(figsize=(9, 5))
 bars = ax.bar(['+10°F\nwarmer', 'Wet\nday', 'Windy\nday', 'Storm\nday'], vals,
