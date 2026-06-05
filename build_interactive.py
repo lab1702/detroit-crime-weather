@@ -52,7 +52,7 @@ padding:20px 24px;margin:0 0 22px;font-size:17px;box-shadow:0 4px 18px rgba(26,2
 .lead .nm{font-weight:800;font-size:21px;letter-spacing:-.01em}
 .lead .tag{font-size:11px;font-weight:700;padding:2px 10px;border-radius:20px;margin-left:8px;vertical-align:middle}
 .tag.v{background:#fde6e1;color:#b8341d} .tag.p{background:#e3f0e6;color:#2c6135}
-.tag.o{background:#eceef2;color:#5b6577} .tag.a{background:#e7eaf1;color:#3a4considerable}
+.tag.o{background:#eceef2;color:#5b6577} .tag.a{background:#e7eaf1;color:#3a4a6b}
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:22px}
 .stat{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:15px 16px;box-shadow:0 3px 14px rgba(26,29,41,.04)}
 .stat .v{font-size:23px;font-weight:800;letter-spacing:-.02em}
@@ -235,7 +235,5 @@ render('__ALL__');
 HTML = (HTML.replace('__DATA__', DATA_JS)
             .replace('__NDAYS__', f"{meta['n_days']:,}")
             .replace('__D0__', meta['d0']).replace('__D1__', meta['d1']))
-# fix a stray typo guard
-HTML = HTML.replace('#3a4considerable','#3a4a6b')
 open('detroit_crime_weather_explorer.html','w').write(HTML)
 print('wrote detroit_crime_weather_explorer.html', round(len(HTML)/1024,1),'KB')

@@ -256,7 +256,7 @@ def profile(series_daily, hourly_counts):
         rain_pct=round(br[2] / mean * 100, 1), rain_sig=bool(pr[2] < 0.05),
         snow_pct=round(br[3] / mean * 100, 1), snow_sig=bool(pr[3] < 0.05),
         peak_hr=peak_hr, peak_month=int(np.argmax(monthly)) + 1,
-        hot_cold=round(relrate[-1] / relrate[0], 2),
+        hot_cold=round(relrate[-1] / relrate[0], 2) if relrate[0] else None,
         wknd=round(s[s.index.dayofweek >= 5].mean(), 2),
         wkdy=round(s[s.index.dayofweek < 5].mean(), 2))
 

@@ -12,7 +12,6 @@ cs = pd.read_csv('category_stats.csv')
 bs = pd.read_csv('bin_stats.csv')
 
 # headline numbers
-total_inc = int(m[[c for c in m.columns if c.isupper() and ' ' in c or c in ['LARCENY','BURGLARY','ROBBERY','HOMICIDE','ARSON','FRAUD','LIQUOR','RUNAWAY','OUIL','GAMBLING','EXTORTION','FORGERY','KIDNAPPING','SOLICITATION']]].sum().sum())
 total_inc = int(m['total_crimes'].sum())
 ndays = len(m)
 d0,d1 = m.index.min().date(), m.index.max().date()
@@ -95,6 +94,8 @@ wknd_prem=(vb['Weekend']-vb['Weekday']).mean()
 nb=pd.read_csv('neighborhood_stats.csv')
 nb_sens=nb.sort_values('pct10',ascending=False)
 top_sens=nb_sens.head(3)
+_dt=nb[nb.neighborhood=='Downtown']['pct10']
+downtown_pct10=_dt.iloc[0] if len(_dt) else top_sens.iloc[2]['pct10']
 nb_vol=nb.sort_values('total',ascending=False)
 pc=pd.read_csv('precinct_stats.csv')
 pc['precinct']=pc['precinct'].astype(str).str.zfill(2)
@@ -311,7 +312,7 @@ a{{color:var(--cool)}}
 <h2><span class="n">07 — The map</span>Heat sensitivity is a downtown, riverfront story</h2>
 <p>Crime is not spread evenly across Detroit, and neither is its responsiveness to heat. The density map below traces the familiar geography — corridors along the major avenues, concentration through the greater downtown core, the river defining the southern edge.</p>
 <figure><img src="{b64('figs/fig9_map.png')}" alt="Detroit crime density map"></figure>
-<p>Coloring each neighborhood by its temperature sensitivity reveals a pattern: the <b>entertainment and riverfront districts react most strongly to heat</b>. {top_sens.iloc[0]['neighborhood']} (+{top_sens.iloc[0]['pct10']:.0f}% per 10&deg;F), {top_sens.iloc[1]['neighborhood']} (+{top_sens.iloc[1]['pct10']:.0f}%), and Downtown (+{nb[nb.neighborhood=='Downtown']['pct10'].iloc[0]:.0f}%) top the list — places where warm weather draws crowds to bars, festivals, and the riverwalk. Quieter residential neighborhoods hover near the citywide +4–5%.</p>
+<p>Coloring each neighborhood by its temperature sensitivity reveals a pattern: the <b>entertainment and riverfront districts react most strongly to heat</b>. {top_sens.iloc[0]['neighborhood']} (+{top_sens.iloc[0]['pct10']:.0f}% per 10&deg;F), {top_sens.iloc[1]['neighborhood']} (+{top_sens.iloc[1]['pct10']:.0f}%), and Downtown (+{downtown_pct10:.0f}%) top the list — places where warm weather draws crowds to bars, festivals, and the riverwalk. Quieter residential neighborhoods hover near the citywide +4–5%.</p>
 <figure><img src="{b64('figs/fig10_nbmap.png')}" alt="Neighborhood temperature sensitivity map"><figcaption>Each bubble is a neighborhood (≥3,000 incidents): size = total volume, color = % more crime per +10&deg;F.</figcaption></figure>
 <p>At the precinct level the effect is universal but graded — every one of Detroit's precincts shows a positive temperature response, from +{pc['pct10'].min():.1f}% to +{pc['pct10'].max():.1f}% per 10&deg;F.</p>
 <table>

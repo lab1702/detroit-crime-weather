@@ -80,7 +80,7 @@ cs = pd.read_csv('category_stats.csv')
 cs = cs[cs.category != 'total_crimes'].sort_values('pct_per_10F')
 def fam_color(c):
     viol = {'AGGRAVATED ASSAULT','ASSAULT','WEAPONS OFFENSES','ROBBERY','HOMICIDE',
-            'SEX OFFENSES','SEXUAL ASSAULT','ARSON','DISORDERLY CONDUCT'}
+            'SEX OFFENSES','SEXUAL ASSAULT','ARSON','DISORDERLY CONDUCT','OBSTRUCTING THE POLICE'}
     prop = {'DAMAGE TO PROPERTY','LARCENY','STOLEN VEHICLE','BURGLARY','STOLEN PROPERTY'}
     return ACCENT if c in viol else ('#3a7d44' if c in prop else '#9aa3b2')
 sig = cs['p'] < 0.05
@@ -88,11 +88,11 @@ colors = [mc.to_rgba(fam_color(c), 1 if s else 0.32) for c, s in zip(cs.category
 fig, ax = plt.subplots(figsize=(9.5, 8))
 ax.barh(cs.category, cs.pct_per_10F, color=colors, edgecolor='white')
 for y, (v, s) in enumerate(zip(cs.pct_per_10F, sig)):
-    ax.text(v + 0.12, y, f'+{v:.1f}%' + ('' if s else '  n.s.'), va='center',
+    ax.text(v + 0.12, y, f'{v:+.1f}%' + ('' if s else '  n.s.'), va='center',
             fontsize=9, color=INK if s else SUB)
 ax.set_xlabel('Change in daily incidents per +10°F  (% of category average)')
 ax.set_title('Which crimes are most temperature-sensitive?', fontsize=15, fontweight='bold', pad=12)
-ax.axvline(0, color=SUB, lw=1); ax.set_xlim(0, 10.5)
+ax.axvline(0, color=SUB, lw=1); ax.set_xlim(min(0, cs.pct_per_10F.min() - 0.8), 10.5)
 ax.legend(handles=[Patch(color=ACCENT, label='Violent / interpersonal'),
     Patch(color='#3a7d44', label='Property'), Patch(color='#9aa3b2', label='Other / administrative')],
     loc='lower right', frameon=False, fontsize=10)
