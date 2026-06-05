@@ -121,8 +121,14 @@ n_nb=len(nb); n_nb_sig=int(nb['sig'].sum())   # neighbourhoods significant after
 nb_sig=nb[nb['sig']]
 nb_sens=(nb_sig if len(nb_sig)>=3 else nb).sort_values('pct10',ascending=False)
 top_sens=nb_sens.head(3)
+# Third named example in the §07 prose: prefer Downtown (the riverfront/downtown
+# story), but only if it is actually present in the table — otherwise name the
+# third-ranked sensitive neighbourhood so the label never mismatches its value.
 _dt=nb[nb.neighborhood=='Downtown']['pct10']
-downtown_pct10=_dt.iloc[0] if len(_dt) else top_sens.iloc[2]['pct10']
+if len(_dt):
+    third_name, third_pct10 = 'Downtown', _dt.iloc[0]
+else:
+    third_name, third_pct10 = top_sens.iloc[2]['neighborhood'], top_sens.iloc[2]['pct10']
 nb_vol=nb.sort_values('total',ascending=False)
 pc=pd.read_csv('precinct_stats.csv')
 pc['precinct']=pc['precinct'].astype(str).str.zfill(2)
@@ -291,7 +297,7 @@ a{{color:var(--cool)}}
 
 <section>
 <h2><span class="n">01 — The headline</span>Warmer days are busier days for Detroit police</h2>
-<p class="lead">Across {ndays:,} days, the daily mean temperature alone accounts for about <b>{tot_r**2*100:.0f}% of the day-to-day variance</b> in how much crime gets reported (Pearson r&nbsp;=&nbsp;{tot_r:.2f}). The relationship is strong, positive, and close to linear ({linear_phrase}): each additional 10&deg;F is associated with roughly <b>{tot_pct:.0f}% more reported crime</b>.</p>
+<p class="lead">Across {ndays:,} days, the daily mean temperature tracks about <b>{tot_r**2*100:.0f}% of the variance in daily crime counts</b> (Pearson r&nbsp;=&nbsp;{tot_r:.2f}) &mdash; though most of that is the shared seasonal swing, not genuine day-to-day movement. Stripped of the calendar, the link is weaker but real: warmer-<i>than-normal</i> days still carry more crime than their season predicts (about <b>{tot_anom**2*100:.0f}% of the within-season variance</b>, r&nbsp;=&nbsp;{tot_anom:.2f}; section&nbsp;04). The relationship is strong, positive, and close to linear ({linear_phrase}): each additional 10&deg;F is associated with roughly <b>{tot_pct:.0f}% more reported crime</b>.</p>
 <figure><img src="{b64('figs/fig1_scatter.png')}" alt="Scatter of daily crime vs temperature"><figcaption>Each dot is one day. Color encodes temperature, from cold blue to hot red. The trend line is a descriptive least-squares fit; the headline percentages come from the Poisson model.</figcaption></figure>
 <figure><img src="{b64('figs/fig2_bins.png')}" alt="Average crime by temperature bin"></figure>
 <div class="take"><b>Takeaway.</b> The coldest days (&lt;20&deg;F) average just {cold:.0f} reported incidents; the hottest (75&deg;F+) average {hot:.0f} — a <b>{pct_cold_hot:.0f}% jump</b>. Heat doesn't only change <i>how much</i> crime occurs, but as the next sections show, <i>which kinds</i>.</div>
@@ -307,7 +313,7 @@ a{{color:var(--cool)}}
 <section>
 <h2><span class="n">03 — Not all crime is equal</span>Heat inflames confrontation, not paperwork</h2>
 <p>Breaking the effect out by offense category reveals a sharp split. <b>Violent and interpersonal crimes</b> are the most temperature-sensitive: aggravated assault, weapons offenses, and homicide all climb steeply with the mercury. <b>Property and outdoor-opportunity crimes</b> respond moderately. And <b>administrative or indoor offenses</b> — fraud, drug cases, court-process violations — barely move at all.</p>
-<figure><img src="{b64('figs/fig3_sensitivity.png')}" alt="Temperature sensitivity by category"><figcaption>Slope of daily incidents on temperature, scaled to each category's own average. Several categories show detectable curvature, so each bar is the average slope across the observed temperature range, not a constant rate at every temperature. "n.s." = not statistically significant.</figcaption></figure>
+<figure><img src="{b64('figs/fig3_sensitivity.png')}" alt="Temperature sensitivity by category"><figcaption>Slope of daily incidents on temperature, scaled to each category's own average. Several categories show detectable curvature, so each bar is the average slope across the observed temperature range, not a constant rate at every temperature. Bar length is the raw per-10&deg;F slope; <b>solid</b> bars survive deseasonalizing (the within-season test of section&nbsp;04), while <b>faded</b> bars do not — "seasonal" marks an effect that is detectable overall but not within season, and "n.s." one that is not significant at all.</figcaption></figure>
 <p>The heatmap below makes the texture vivid. Read across a row: deep red means a category runs well above its yearly average on hot days, deep blue means well below. Aggravated assault and weapons offenses swing from ~0.69&times; their average in deep cold to ~1.29&times; in heat — a near-doubling. Fraud and drug cases stay flat all the way across.</p>
 <figure><img src="{b64('figs/fig5_heatmap.png')}" alt="Heatmap of relative crime rate by temperature"></figure>
 <div class="take"><b>Takeaway.</b> The "heat &rarr; aggression" pattern long documented in criminology shows up cleanly here: temperature acts most on <b>impulsive, face-to-face violence</b>, and least on premeditated or indoor offenses.</div>
@@ -341,7 +347,7 @@ a{{color:var(--cool)}}
 <h2><span class="n">07 — The map</span>Heat sensitivity is a downtown, riverfront story</h2>
 <p>Crime is not spread evenly across Detroit, and neither is its responsiveness to heat. The density map below traces the familiar geography — corridors along the major avenues, concentration through the greater downtown core, the river defining the southern edge.</p>
 <figure><img src="{b64('figs/fig9_map.png')}" alt="Detroit crime density map"></figure>
-<p>Coloring each neighborhood by its temperature sensitivity reveals a pattern: the <b>entertainment and riverfront districts react most strongly to heat</b>. Among the {n_nb_sig} of {n_nb} neighborhoods whose slope is statistically distinguishable from zero (Benjamini-Hochberg FDR&nbsp;<&nbsp;0.05), {top_sens.iloc[0]['neighborhood']} (+{top_sens.iloc[0]['pct10']:.0f}% per 10&deg;F), {top_sens.iloc[1]['neighborhood']} (+{top_sens.iloc[1]['pct10']:.0f}%), and Downtown (+{downtown_pct10:.0f}%) top the list — places where warm weather draws crowds to bars, festivals, and the riverwalk. Quieter residential neighborhoods hover near the citywide +4–5%. The ranking is of noisy per-neighborhood point estimates, so read the broad pattern, not the exact order.</p>
+<p>Coloring each neighborhood by its temperature sensitivity reveals a pattern: the <b>entertainment and riverfront districts react most strongly to heat</b>. Among the {n_nb_sig} of {n_nb} neighborhoods whose slope is statistically distinguishable from zero (Benjamini-Hochberg FDR&nbsp;<&nbsp;0.05), {top_sens.iloc[0]['neighborhood']} (+{top_sens.iloc[0]['pct10']:.0f}% per 10&deg;F), {top_sens.iloc[1]['neighborhood']} (+{top_sens.iloc[1]['pct10']:.0f}%), and {third_name} (+{third_pct10:.0f}%) top the list — places where warm weather draws crowds to bars, festivals, and the riverwalk. Quieter residential neighborhoods hover near the citywide +4–5%. The ranking is of noisy per-neighborhood point estimates, so read the broad pattern, not the exact order.</p>
 <figure><img src="{b64('figs/fig10_nbmap.png')}" alt="Neighborhood temperature sensitivity map"><figcaption>Each bubble is a neighborhood (≥3,000 incidents): size = total volume, color = % more crime per +10&deg;F.</figcaption></figure>
 <p>At the precinct level the effect is broad but graded — every one of Detroit's precincts shows a positive point estimate (from +{pc['pct10'].min():.1f}% to +{pc['pct10'].max():.1f}% per 10&deg;F), and {n_pc_sig} of {n_pc} are individually significant after FDR correction (the rest, flagged <span class="ns">n.s.</span> below, are positive but not distinguishable from zero on their own).</p>
 <table>
