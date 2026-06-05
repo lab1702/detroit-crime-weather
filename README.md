@@ -56,3 +56,10 @@ step 1.
 
 - Crime: [Detroit Open Data Portal](https://data.detroitmi.gov/)
 - Weather: [Open-Meteo](https://open-meteo.com/) historical archive
+
+## License
+
+Code in this repository is released under the [MIT License](LICENSE).
+The license covers the pipeline and build scripts only — the underlying crime
+and weather data are not redistributed here and remain subject to their
+providers' own terms.
