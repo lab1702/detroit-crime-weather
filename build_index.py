@@ -8,8 +8,12 @@ cs = pd.read_csv('category_stats.csv')
 catonly = cs[cs.category!='total_crimes']
 n_cat = (catonly['total']>=2000).sum()
 # headline offense: most heat-sensitive among substantial-volume categories
-# (avoids tiny noisy categories topping the raw slope ranking)
-top = catonly[catonly['total']>=10000].sort_values('pct_per_10F',ascending=False).iloc[0]
+# (>=10k incidents avoids tiny noisy categories topping the raw slope ranking).
+# Gate on the within-season FDR test (anom_p_fdr<0.05) so the landing page never
+# promotes a category whose slope is just the calendar — matching how fig3 fades
+# seasonal-only categories rather than ranking on the raw point estimate alone.
+_cand = catonly[(catonly['total']>=10000) & (catonly['anom_p_fdr']<0.05)]
+top = _cand.sort_values('pct_per_10F',ascending=False).iloc[0]
 
 # bin extremes for the hot-vs-cold headline
 bs = pd.read_csv('bin_stats.csv')

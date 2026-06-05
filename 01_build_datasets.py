@@ -213,7 +213,17 @@ cstat.loc[_catmask, 'anom_p_fdr'] = bh(cstat.loc[_catmask, 'anom_p'].values)
 cstat.to_csv('category_stats.csv', index=False)
 
 # ----------------------------------------------- category_precip.csv (temp-controlled)
-Mc = dcat.join(wf, how='inner')
+# Reindex the category counts onto the asserted-contiguous daily index (fillna(0)
+# for any true zero-incident day) and align weather to the same index, so the HAC
+# lag kernel below sees a strict one-day-apart series. A plain dcat.join(wf) would
+# instead rely on every calendar day happening to carry an incident — true in a
+# ~230/day city, but unasserted, unlike the category_stats and geography paths.
+Mc = dcat.reindex(temp.index).fillna(0).join(wf.reindex(temp.index), how='left')
+_mc_miss = int(Mc[['temperature_2m_mean', 'rain_sum', 'snowfall_sum',
+                   'precipitation_sum']].isna().any(axis=1).sum())
+if _mc_miss:
+    raise SystemExit(f"{_mc_miss} weather day(s) missing from the full-weather frame "
+                     "after reindexing to the daily index — cannot fit category_precip")
 Tc = Mc['temperature_2m_mean'].values; Rc = Mc['rain_sum'].values
 Sc = Mc['snowfall_sum'].values; Wc = (Mc['precipitation_sum'] >= 0.01).astype(float).values
 DOWc = Mc.index.dayofweek

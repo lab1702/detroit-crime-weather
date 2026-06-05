@@ -41,7 +41,7 @@ an accepted cost of not imposing a one-day-lag structure where the rows are not
 one day apart.  We use the ``HC3`` variant rather than ``HC0``: HC3 inflates
 each squared score residual by ``1/(1-h_i)^2`` (``h_i`` the weighted-hat
 leverage), which keeps it well-calibrated on the small sub-samples (e.g.
-hot-days-only, ~100 rows) where the uncorrected HC0 sandwich understates the
+hot-days-only, ~250 rows) where the uncorrected HC0 sandwich understates the
 standard errors.  NB: statsmodels' GLM ignores the HCx leverage corrections —
 ``cov_type="HC0".."HC3"`` all return the *same* HC0 sandwich — so we form the
 HC3 sandwich directly in ``_poisson_hc3_cov`` rather than trusting the keyword.
