@@ -30,10 +30,13 @@ can no longer interpret on an irregular index.  This also drops the genuine
 serial correlation that still survives between the few adjacent retained days
 (e.g. consecutive hot days), so the White SEs can be mildly anti-conservative —
 an accepted cost of not imposing a one-day-lag structure where the rows are not
-one day apart.  We use the ``HC3`` variant rather than ``HC0``: HC3 carries a
-leverage correction that keeps it well-calibrated on the small sub-samples (e.g.
+one day apart.  We use the ``HC3`` variant rather than ``HC0``: HC3 inflates
+each squared score residual by ``1/(1-h_i)^2`` (``h_i`` the weighted-hat
+leverage), which keeps it well-calibrated on the small sub-samples (e.g.
 hot-days-only, ~100 rows) where the uncorrected HC0 sandwich understates the
-standard errors.
+standard errors.  NB: statsmodels' GLM ignores the HCx leverage corrections —
+``cov_type="HC0".."HC3"`` all return the *same* HC0 sandwich — so we form the
+HC3 sandwich directly in ``_poisson_hc3_cov`` rather than trusting the keyword.
 
 ``bh`` returns Benjamini-Hochberg FDR-adjusted q-values for a family of tests.
 
@@ -42,12 +45,15 @@ on the day-of-year) and returns anomalies; it is leap-year safe and far more
 stable than a raw per-calendar-day mean estimated from only ~9 observations
 per day.
 
-These are thin wrappers over statsmodels; they only fix the Newey-West
-bandwidth and unpack ``(params, pvalues)`` in the shape the pipeline expects.
+These are thin wrappers over statsmodels (the ``hac=False`` path additionally
+forms its own HC3 sandwich, since statsmodels' GLM does not); they fix the
+Newey-West bandwidth and unpack ``(params, pvalues)`` in the shape the pipeline
+expects.
 """
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
+from scipy import stats as _sps
 from statsmodels.stats.multitest import multipletests
 
 
@@ -77,6 +83,30 @@ def _dow_dummies(dow):
     return np.column_stack([(dow == d).astype(float) for d in range(1, 7)])
 
 
+def _poisson_hc3_cov(y, Xc, beta):
+    """HC3 (leverage-corrected White) sandwich for a fitted Poisson log-link PML.
+
+    statsmodels' GLM returns the uncorrected HC0 sandwich for every ``HCx``
+    keyword, so we build HC3 here.  For a Poisson log link the IRLS weight is
+    ``mu`` itself, giving:
+
+        bread = (X' diag(mu) X)^-1
+        h_i   = mu_i * x_i' bread x_i                 (weighted-hat leverage)
+        meat  = X' diag( (y-mu)^2 / (1-h_i)^2 ) X     (HC3; drop the denom for HC0)
+        cov   = bread @ meat @ bread
+
+    Setting the ``1/(1-h_i)^2`` factor to 1 reproduces statsmodels' HC0 exactly
+    (verified), so this is the genuine HC3 generalisation of that estimator.
+    """
+    mu = np.exp(Xc @ beta)
+    bread = np.linalg.inv((Xc * mu[:, None]).T @ Xc)
+    h = mu * np.einsum("ij,jk,ik->i", Xc, bread, Xc)   # diag of the weighted hat matrix
+    h = np.clip(h, 0.0, 1.0 - 1e-8)                     # guard the 1/(1-h) blow-up
+    w = ((y - mu) / (1.0 - h)) ** 2
+    meat = (Xc * w[:, None]).T @ Xc
+    return bread @ meat @ bread
+
+
 def poisson_hac(y, X, hac=True, dow=None):
     """Poisson PML (log link) with a robust sandwich covariance.
 
@@ -88,7 +118,9 @@ def poisson_hac(y, X, hac=True, dow=None):
            contiguous daily series); if False use a White/HC3 sandwich (for
            non-contiguous sub-samples where the autocovariance lags are
            meaningless; HC3's leverage correction keeps small sub-samples
-           well-calibrated).
+           well-calibrated). The HC3 sandwich is formed directly in
+           ``_poisson_hc3_cov`` because statsmodels' GLM silently ignores the
+           HCx leverage correction and would otherwise return only HC0.
     dow  : optional array of weekday integers (0=Mon … 6=Sun) aligned to ``y``.
            When given, six day-of-week indicators are appended as the LAST
            regressors to soak up Detroit's strong weekly cycle (raw lag-7
@@ -104,13 +136,20 @@ def poisson_hac(y, X, hac=True, dow=None):
     if dow is not None:
         cols.append(_dow_dummies(dow))
     Xc = sm.add_constant(np.column_stack(cols))
+    y = np.asarray(y, dtype=float)
     if hac:
-        cov_kwds = {"cov_type": "HAC", "cov_kwds": {"maxlags": _newey_west_lags(len(y)),
-                                                    "use_correction": False}}
-    else:
-        cov_kwds = {"cov_type": "HC3"}
-    res = sm.GLM(np.asarray(y, dtype=float), Xc, family=sm.families.Poisson()).fit(**cov_kwds)
-    return res.params, res.pvalues
+        res = sm.GLM(y, Xc, family=sm.families.Poisson()).fit(
+            cov_type="HAC", cov_kwds={"maxlags": _newey_west_lags(len(y)),
+                                      "use_correction": False})
+        return res.params, res.pvalues
+    # Non-contiguous sub-sample: HAC lags are meaningless. statsmodels' GLM only
+    # delivers HC0 for any HCx, so form the HC3 sandwich ourselves and derive the
+    # two-sided z p-values from it (point estimates are cov-type-independent).
+    res = sm.GLM(y, Xc, family=sm.families.Poisson()).fit()
+    beta = np.asarray(res.params, dtype=float)
+    se = np.sqrt(np.diag(_poisson_hc3_cov(y, Xc, beta)))
+    pvals = 2.0 * _sps.norm.sf(np.abs(beta / se))
+    return res.params, pvals
 
 
 def bh(pvals):
